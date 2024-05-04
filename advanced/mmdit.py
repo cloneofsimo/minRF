@@ -1,10 +1,11 @@
 ## MM DiT model that was proposed by SD3 paper.
 # I've tried to make this follow the work of MuP, so they scale in maximal feature-learning regime.
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 
 
 def modulate(x, shift, scale):
@@ -115,7 +116,7 @@ class MMDiTBlock(nn.Module):
         self.is_last = is_last
 
     def forward(self, c, x, global_cond, **kwargs):
-        print(c.shape, x.shape)
+
         cres, xres = c, x
         # cpath
         if not self.is_last:
@@ -195,7 +196,6 @@ class MMDiT(nn.Module):
         cond_seq_dim=2048,
         cond_vector_dim=1024,
         max_seq=32 * 32,
-        cond_seq_length=32,
     ):
         super().__init__()
 
@@ -278,11 +278,58 @@ class MMDiT(nn.Module):
         return x
 
 
+class MMDiT_for_IN1K(MMDiT):
+    # This will "simulate" having clip.
+    # it will act as having clip that encodes both clip global vector and clip sequence vector.
+    # in reality this is just one hot encoding.
+    def __init__(
+        self,
+        in_channels=4,
+        out_channels=4,
+        patch_size=2,
+        dim=1024,
+        n_layers=8,
+        n_heads=4,
+        global_conddim=1024,
+        cond_seq_dim=2048,
+        cond_vector_dim=1024,
+        max_seq=32 * 32,
+    ):
+        super(MMDiT_for_IN1K, self).__init__(
+            in_channels,
+            out_channels,
+            patch_size,
+            dim,
+            n_layers,
+            n_heads,
+            global_conddim,
+            cond_seq_dim,
+            cond_vector_dim,
+            max_seq,
+        )
+
+    def forward(self, x, t, conds, **kwargs):
+        # one hot
+        conds_1 = F.one_hot(conds, num_classes=2048).unsqueeze(1).float()
+        conds_2 = F.one_hot(conds + 1024, num_classes=2048).unsqueeze(1).float()
+        conds_g = F.one_hot(conds, num_classes=1024).float()
+
+        conds_dict = {"c_seq": torch.cat([conds_1, conds_2], dim=1), "c_vec": conds_g}
+        return super(MMDiT_for_IN1K, self).forward(x, t, conds_dict, **kwargs)
+
+
 if __name__ == "__main__":
-    model = MMDiT()
+    # model = MMDiT()
+    # x = torch.randn(2, 4, 32, 32)
+    # t = torch.randn(2)
+    # conds = {"c_seq": torch.randn(2, 32, 2048), "c_vec": torch.randn(2, 1024)}
+    # out = model(x, t, conds)
+    # print(out.shape)
+    # print(out)
+
+    model = MMDiT_for_IN1K()
     x = torch.randn(2, 4, 32, 32)
     t = torch.randn(2)
-    conds = {"c_seq": torch.randn(2, 32, 2048), "c_vec": torch.randn(2, 1024)}
+    conds = torch.randint(0, 1000, (2,))
     out = model(x, t, conds)
     print(out.shape)
-    print(out)

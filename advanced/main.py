@@ -20,8 +20,7 @@ from tqdm import tqdm
 from transformers import get_scheduler
 
 import wandb
-
-from ..dit import DiT_Llama
+from mmdit import MMDiT_for_IN1K
 
 
 class RF(torch.nn.Module):
@@ -141,11 +140,11 @@ _encodings["uint8"] = uint8
 @click.command()
 @click.option("--local_rank", default=-1, help="Local rank")
 @click.option("--num_train_epochs", default=2000, help="Number of training epochs")
-@click.option("--learning_rate", default=1e-4, help="Learning rate")
+@click.option("--learning_rate", default=5e-4, help="Learning rate")
 @click.option("--offload", default=False, help="Offload")
-@click.option("--train_batch_size", default=256, help="Train batch size")
+@click.option("--train_batch_size", default=1024, help="Train batch size")
 @click.option(
-    "--per_device_train_batch_size", default=32, help="Per device train batch size"
+    "--per_device_train_batch_size", default=128, help="Per device train batch size"
 )
 @click.option("--zero_stage", default=2, help="Zero stage")
 @click.option("--seed", default=42, help="Seed")
@@ -160,7 +159,7 @@ def main(
     zero_stage=2,
     seed=42,
     run_name=None,
-    train_dir="../vae_mds",
+    train_dir="./vae_mds",
     skipped_ema_step=16,
 ):
     # first, set the seed
@@ -182,6 +181,7 @@ def main(
         deepspeed.init_distributed()
 
     # set LOCAL_WORLD_SIZE to 8
+
     os.environ["LOCAL_WORLD_SIZE"] = str(os.environ.get("WORLD_SIZE"))
 
     offload_device = "cpu" if offload else "none"
@@ -198,7 +198,7 @@ def main(
             "stage3_prefetch_bucket_size": 3e7,
             "memory_efficient_linear": False,
         },
-        "bfloat16": {"enabled": True},
+        "bfloat16": {"enabled": False},
         "gradient_clipping": 1.0,
     }
 
@@ -210,22 +210,21 @@ def main(
 
     with deepspeed.zero.Init(enabled=(zero_stage == 3)):
 
-        ddpm = RF(
-            DiT_Llama(
+        rf = RF(
+            MMDiT_for_IN1K(
                 in_channels=4,
+                out_channels=4,
                 dim=512,
-                n_layers=12,
-                n_heads=16,
-                num_classes=1000,
-                ffn_dim_multiplier=4,
+                n_layers=6,
+                n_heads=8,
             ),
             1000,
         ).cuda()
 
-    ema_state_dict1 = extract_model_state_dict_deepspeed(ddpm, global_rank)
-    ema_state_dict2 = extract_model_state_dict_deepspeed(ddpm, global_rank)
+    ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
+    ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
 
-    total_params = sum(p.numel() for p in ddpm.parameters())
+    total_params = sum(p.numel() for p in rf.parameters())
     size_in_bytes = total_params * 4
     size_in_gb = size_in_bytes / (1024**3)
     logger.info(
@@ -259,20 +258,20 @@ def main(
     torch.distributed.barrier()
 
     optimizer = torch.optim.AdamW(
-        ddpm.eps_model.parameters(), lr=learning_rate, weight_decay=0.1
+        rf.model.parameters(), lr=learning_rate, weight_decay=0.1
     )
 
     lr_scheduler = get_scheduler(
         name="linear",
         optimizer=optimizer,
-        num_warmup_steps=100,
+        num_warmup_steps=1000,
         num_training_steps=num_train_epochs * math.ceil(len(dataloader)),
     )
 
-    ddpm.train()
+    rf.train()
 
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
-        model=ddpm, config=ds_config, lr_scheduler=lr_scheduler, optimizer=optimizer
+        model=rf, config=ds_config, lr_scheduler=lr_scheduler, optimizer=optimizer
     )
 
     global_step = 0
@@ -306,10 +305,10 @@ def main(
                 batch["vae_output"].reshape(-1, 4, 32, 32).to(device).to(torch.bfloat16)
                 * 0.13025
             )
-            t = torch.randint(1, ddpm.n_T + 1, (x.shape[0],)).to(x.device)
+
             y = torch.tensor(list(map(int, batch["label"]))).long().to(x.device)
 
-            loss, info = model_engine(x, t, y)
+            loss, info = model_engine(x, y)
             model_engine.backward(loss)
             model_engine.step()
 
@@ -326,9 +325,7 @@ def main(
 
             if global_step % skipped_ema_step == 1:
 
-                current_state_dict = extract_model_state_dict_deepspeed(
-                    ddpm, global_rank
-                )
+                current_state_dict = extract_model_state_dict_deepspeed(rf, global_rank)
 
                 if global_rank == 0:
 
