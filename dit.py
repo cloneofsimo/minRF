@@ -111,11 +111,6 @@ class Attention(nn.Module):
     def forward(self, x, freqs_cis):
         bsz, seqlen, _ = x.shape
 
-        h = w = int(seqlen**0.5)
-        # perform learned downsample
-        # xP = x.view(bsz, h, w, -1).permute(0, 3, 1, 2)
-        # xP = self.sr(xP).permute(0, 2, 3, 1).flatten(1, 2)
-
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
         dtype = xq.dtype

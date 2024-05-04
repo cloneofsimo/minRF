@@ -1,5 +1,6 @@
 # implementation of Rectified Flow for simple minded people like me.
 import argparse
+
 import torch
 
 
@@ -46,17 +47,19 @@ class RF:
 
 if __name__ == "__main__":
     # train class conditional RF on mnist.
-    from torchvision import datasets, transforms
-    from torch.utils.data import DataLoader
-    import torch.optim as optim
-    from dit import DiT_Llama
-    from torchvision.utils import make_grid
     import numpy as np
+    import torch.optim as optim
     from PIL import Image
-    import wandb
+    from torch.utils.data import DataLoader
+    from torchvision import datasets, transforms
+    from torchvision.utils import make_grid
+    from tqdm import tqdm
 
-    parser = argparse.ArgumentParser(description = 'use cifar?')
-    parser.add_argument('--cifar', action='store_true')
+    import wandb
+    from dit import DiT_Llama
+
+    parser = argparse.ArgumentParser(description="use cifar?")
+    parser.add_argument("--cifar", action="store_true")
     args = parser.parse_args()
     CIFAR = args.cifar
 
@@ -72,29 +75,33 @@ if __name__ == "__main__":
             ]
         )
         channels = 3
-        dim = 512
+        model = DiT_Llama(
+            channels, 32, dim=256, n_layers=10, n_heads=8, num_classes=10
+        ).cuda()
 
     else:
         dataset_name = "mnist"
         fdatasets = datasets.MNIST
         transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Pad(2), transforms.Normalize((0.5,), (0.5,))]
+            [
+                transforms.ToTensor(),
+                transforms.Pad(2),
+                transforms.Normalize((0.5,), (0.5,)),
+            ]
         )
         channels = 1
-        dim = 64
+        model = DiT_Llama(
+            channels, 32, dim=64, n_layers=6, n_heads=4, num_classes=10
+        ).cuda()
 
-    model = DiT_Llama(channels, 32, dim=dim, n_layers=6, n_heads=4, num_classes=10).cuda()
-    # print model size
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {model_size}, {model_size / 1e6}M")
-    
+
     rf = RF(model)
-    optimizer = optim.Adam(model.parameters(), lr=4e-4)
+    optimizer = optim.Adam(model.parameters(), lr=5e-4)
     criterion = torch.nn.MSELoss()
 
-    mnist = fdatasets(
-        root="./data", train=True, download=True, transform=transform
-    )
+    mnist = fdatasets(root="./data", train=True, download=True, transform=transform)
     dataloader = DataLoader(mnist, batch_size=256, shuffle=True, drop_last=True)
 
     wandb.init(project=f"rf_{dataset_name}")
@@ -102,12 +109,14 @@ if __name__ == "__main__":
     for epoch in range(100):
         lossbin = {i: 0 for i in range(10)}
         losscnt = {i: 1e-6 for i in range(10)}
-        for i, (x, c) in enumerate(dataloader):
+        for i, (x, c) in tqdm(enumerate(dataloader)):
             x, c = x.cuda(), c.cuda()
             optimizer.zero_grad()
             loss, blsct = rf.forward(x, c)
             loss.backward()
             optimizer.step()
+
+            wandb.log({"loss": loss.item()})
 
             # count based on t
             for t, l in blsct:
