@@ -28,6 +28,20 @@ python rf.py
 
 to train the model on MNIST from scratch.
 
+If you are cool and want to train CIFAR instead, you can do that.
+
+```bash
+python rf.py --cifar
+```
+
+On 63'th epoch, your output should be something like:
+
+<p align="center">
+  <img src="contents/cifar_63.gif" alt="large" width="300">
+  <img src="contents/cifar_63.png" alt="large" width="300">
+</p>
+
+
 # 2. *Massive* Rectified Flow
 
 This is for gigachads who wants to train Imagenet instead. Don't worry! IMO Imagenet is the new MNIST, and we will use my [imagenet.int8](https://huggingface.co/datasets/cloneofsimo/imagenet.int8) dataset for this.
