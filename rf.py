@@ -1,5 +1,5 @@
 # implementation of Rectified Flow for simple minded people like me.
-
+import argparse
 import torch
 
 
@@ -55,21 +55,49 @@ if __name__ == "__main__":
     from PIL import Image
     import wandb
 
-    model = DiT_Llama(1, 32, dim=64, n_layers=6, n_heads=4, num_classes=10).cuda()
+    parser = argparse.ArgumentParser(description = 'use cifar?')
+    parser.add_argument('--cifar', action='store_true')
+    args = parser.parse_args()
+    CIFAR = args.cifar
+
+    if CIFAR:
+        dataset_name = "cifar"
+        fdatasets = datasets.CIFAR10
+        transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.RandomCrop(32),
+                transforms.RandomHorizontalFlip(),
+                transforms.Normalize((0.5,), (0.5,)),
+            ]
+        )
+        channels = 3
+        dim = 512
+
+    else:
+        dataset_name = "mnist"
+        fdatasets = datasets.MNIST
+        transform = transforms.Compose(
+            [transforms.ToTensor(), transforms.Pad(2), transforms.Normalize((0.5,), (0.5,))]
+        )
+        channels = 1
+        dim = 64
+
+    model = DiT_Llama(channels, 32, dim=dim, n_layers=6, n_heads=4, num_classes=10).cuda()
+    # print model size
+    model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Number of parameters: {model_size}, {model_size / 1e6}M")
+    
     rf = RF(model)
-    optimizer = optim.Adam(model.parameters(), lr=2e-4)
+    optimizer = optim.Adam(model.parameters(), lr=4e-4)
     criterion = torch.nn.MSELoss()
 
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Pad(2), transforms.Normalize((0.5,), (0.5,))]
-    )
-
-    mnist = datasets.MNIST(
+    mnist = fdatasets(
         root="./data", train=True, download=True, transform=transform
     )
     dataloader = DataLoader(mnist, batch_size=256, shuffle=True, drop_last=True)
 
-    wandb.init(project="rf_mnist")
+    wandb.init(project=f"rf_{dataset_name}")
 
     for epoch in range(100):
         lossbin = {i: 0 for i in range(10)}
@@ -97,7 +125,7 @@ if __name__ == "__main__":
             cond = torch.arange(0, 16).cuda() % 10
             uncond = torch.ones_like(cond) * 10
 
-            init_noise = torch.randn(16, 1, 32, 32).cuda()
+            init_noise = torch.randn(16, channels, 32, 32).cuda()
             images = rf.sample(init_noise, cond, uncond)
             # image sequences to gif
             gif = []
