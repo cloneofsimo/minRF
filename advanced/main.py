@@ -140,11 +140,11 @@ _encodings["uint8"] = uint8
 @click.command()
 @click.option("--local_rank", default=-1, help="Local rank")
 @click.option("--num_train_epochs", default=2000, help="Number of training epochs")
-@click.option("--learning_rate", default=5e-4, help="Learning rate")
+@click.option("--learning_rate", default=1e-4, help="Learning rate")
 @click.option("--offload", default=False, help="Offload")
-@click.option("--train_batch_size", default=1024, help="Train batch size")
+@click.option("--train_batch_size", default=512, help="Train batch size")
 @click.option(
-    "--per_device_train_batch_size", default=128, help="Per device train batch size"
+    "--per_device_train_batch_size", default=64, help="Per device train batch size"
 )
 @click.option("--zero_stage", default=2, help="Zero stage")
 @click.option("--seed", default=42, help="Seed")
@@ -164,8 +164,6 @@ def main(
 ):
     # first, set the seed
     set_seed(seed)
-    torch.backends.cuda.enable_mem_efficient_sdp(False)
-    torch.backends.cuda.enable_flash_sdp(False)
 
     if run_name is None:
         run_name = (
@@ -214,11 +212,11 @@ def main(
             MMDiT_for_IN1K(
                 in_channels=4,
                 out_channels=4,
-                dim=512,
+                dim=1024,
                 n_layers=6,
                 n_heads=8,
             ),
-            1000,
+            True,
         ).cuda()
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
@@ -307,6 +305,12 @@ def main(
             )
 
             y = torch.tensor(list(map(int, batch["label"]))).long().to(x.device)
+            # randomly make y into index 1000, with prob 0.1
+            y = torch.where(
+                torch.rand_like(y.float()) < 0.1,
+                (torch.ones_like(y) * 1000).long(),
+                y,
+            )
 
             loss, info = model_engine(x, y)
             model_engine.backward(loss)

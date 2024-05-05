@@ -209,7 +209,7 @@ class MMDiT(nn.Module):
             patch_size * patch_size * in_channels, dim
         )  # init linear for patchified image.
 
-        self.pe = nn.Parameter(torch.randn(1, max_seq, dim))
+        self.pe = nn.Parameter(torch.randn(1, max_seq, dim) * 0.02)
 
         self.layers = nn.ModuleList([])
         for idx in range(n_layers):
@@ -231,6 +231,21 @@ class MMDiT(nn.Module):
 
         self.out_channels = out_channels
         self.patch_size = patch_size
+        self.apply(self._init_weights)
+        for pn, p in self.named_parameters():
+            if pn.endswith("w1o.weight") or pn.endswith("w2o.weight"):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.ones_(module.weight)
 
     def unpatchify(self, x):
         c = self.out_channels
