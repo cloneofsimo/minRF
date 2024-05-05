@@ -139,19 +139,29 @@ _encodings["uint8"] = uint8
 
 @click.command()
 @click.option("--local_rank", default=-1, help="Local rank")
-@click.option("--num_train_epochs", default=2000, help="Number of training epochs")
+@click.option("--num_train_epochs", default=2, help="Number of training epochs")
 @click.option("--learning_rate", default=3e-3, help="Learning rate")
 @click.option("--offload", default=False, help="Offload")
-@click.option("--train_batch_size", default=1024, help="Train batch size")
+@click.option("--train_batch_size", default=1024, help="Total Train batch size")
 @click.option(
     "--per_device_train_batch_size", default=128, help="Per device train batch size"
 )
-@click.option("--zero_stage", default=1, help="Zero stage")
-@click.option("--seed", default=42, help="Seed")
-@click.option("--run_name", default=None, help="Run name")
-@click.option("--train_dir", default="./vae_mds", help="Train dir")
-@click.option("--skipped_ema_step", default=16, help="Skipped EMA step")
+@click.option("--zero_stage", default=1, help="Zero stage, from 0 to 3")
+@click.option("--seed", default=42, help="Seed for rng")
+@click.option("--run_name", default=None, help="Run name that will be used for wandb")
+@click.option("--train_dir", default="./vae_mds", help="Train dir that MDS can read")
+@click.option(
+    "--skipped_ema_step",
+    default=16,
+    help="Skipped EMA step. Karras EMA will save model every skipped_ema_step",
+)
 @click.option("--weight_decay", default=0.1, help="Weight decay")
+@click.option(
+    "--hidden_dim",
+    default=256,
+    help="Hidden dim, this will mainly determine the model size",
+)
+@click.option("--save_dir", default="./ckpt", help="Save dir for model")
 def main(
     local_rank,
     train_batch_size,
@@ -164,8 +174,9 @@ def main(
     run_name=None,
     train_dir="./vae_mds",
     skipped_ema_step=16,
-    weight_decay=0.1,
-    hidden_dim=1024,
+    weight_decay=0.01,
+    hidden_dim=256,
+    save_dir="./ckpt",
 ):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -299,7 +310,7 @@ def main(
     lr_scheduler = get_scheduler(
         name="linear",
         optimizer=optimizer,
-        num_warmup_steps=1000,
+        num_warmup_steps=20,
         num_training_steps=num_train_epochs * math.ceil(len(dataloader)),
     )
 
@@ -428,19 +439,25 @@ def main(
             )
 
             if global_step % 800 == 1:
+                # make save_dir
+                os.makedirs(save_dir, exist_ok=True)
 
-                os.makedirs(f"./ckpt/model_{global_step}", exist_ok=True)
+                os.makedirs(f"{save_dir}/model_{global_step}", exist_ok=True)
                 save_zero_three_model(
                     model_engine,
                     global_rank,
-                    f"./ckpt/model_{global_step}/",
+                    f"{save_dir}/model_{global_step}/",
                     zero_stage=zero_stage,
                 )
 
                 # save ema weights
                 if global_rank == 0:
-                    torch.save(ema_state_dict1, f"./ckpt/model_{global_step}/ema1.pt")
-                    torch.save(ema_state_dict2, f"./ckpt/model_{global_step}/ema2.pt")
+                    torch.save(
+                        ema_state_dict1, f"{save_dir}/model_{global_step}/ema1.pt"
+                    )
+                    torch.save(
+                        ema_state_dict2, f"{save_dir}/model_{global_step}/ema2.pt"
+                    )
 
                 print(f"Model saved at {global_step}")
 
