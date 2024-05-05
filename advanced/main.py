@@ -10,9 +10,9 @@ import deepspeed
 import numpy as np
 import streaming.base.util as util
 import torch
+from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed import get_accelerator
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-from deepspeed.utils import logger
 from streaming import StreamingDataset
 from streaming.base.format.mds.encodings import Encoding, _encodings
 from torch.utils.data import DataLoader
@@ -140,15 +140,18 @@ _encodings["uint8"] = uint8
 @click.command()
 @click.option("--local_rank", default=-1, help="Local rank")
 @click.option("--num_train_epochs", default=2000, help="Number of training epochs")
-@click.option("--learning_rate", default=1e-4, help="Learning rate")
+@click.option("--learning_rate", default=3e-3, help="Learning rate")
 @click.option("--offload", default=False, help="Offload")
-@click.option("--train_batch_size", default=512, help="Train batch size")
+@click.option("--train_batch_size", default=1024, help="Train batch size")
 @click.option(
-    "--per_device_train_batch_size", default=64, help="Per device train batch size"
+    "--per_device_train_batch_size", default=128, help="Per device train batch size"
 )
-@click.option("--zero_stage", default=2, help="Zero stage")
+@click.option("--zero_stage", default=1, help="Zero stage")
 @click.option("--seed", default=42, help="Seed")
 @click.option("--run_name", default=None, help="Run name")
+@click.option("--train_dir", default="./vae_mds", help="Train dir")
+@click.option("--skipped_ema_step", default=16, help="Skipped EMA step")
+@click.option("--weight_decay", default=0.1, help="Weight decay")
 def main(
     local_rank,
     train_batch_size,
@@ -161,7 +164,11 @@ def main(
     run_name=None,
     train_dir="./vae_mds",
     skipped_ema_step=16,
+    weight_decay=0.1,
+    hidden_dim=1024,
 ):
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     # first, set the seed
     set_seed(seed)
 
@@ -212,7 +219,7 @@ def main(
             MMDiT_for_IN1K(
                 in_channels=4,
                 out_channels=4,
-                dim=1024,
+                dim=hidden_dim,
                 n_layers=6,
                 n_heads=8,
             ),
@@ -225,7 +232,7 @@ def main(
     total_params = sum(p.numel() for p in rf.parameters())
     size_in_bytes = total_params * 4
     size_in_gb = size_in_bytes / (1024**3)
-    logger.info(
+    print(
         f"Model Size: {size_in_bytes}, {size_in_gb} GB, Total Param Count: {total_params / 1e6} M"
     )
 
@@ -254,9 +261,39 @@ def main(
     )
 
     torch.distributed.barrier()
+    ## Config muP-learning rate.
+    no_decay_name_list = ["bias", "norm"]
 
-    optimizer = torch.optim.AdamW(
-        rf.model.parameters(), lr=learning_rate, weight_decay=0.1
+    optimizer_grouped_parameters = []
+    final_optimizer_settings = {}
+
+    for n, p in rf.named_parameters():
+        group_parameters = {}
+        if p.requires_grad:
+            if any(ndnl in n for ndnl in no_decay_name_list):
+                group_parameters["weight_decay"] = 0.0
+            else:
+                group_parameters["weight_decay"] = weight_decay
+
+            # Define learning rate for specific types of params
+
+            is_embed = "embed" in n
+            if "embed" in n or any(ndnl in n for ndnl in no_decay_name_list):
+                group_parameters["lr"] = learning_rate * (3.3 if is_embed else 1.0)
+            else:
+                group_parameters["lr"] = learning_rate * (256 / hidden_dim)
+
+            group_parameters["params"] = [p]
+            final_optimizer_settings[n] = {
+                "lr": group_parameters["lr"],
+                "wd": group_parameters["weight_decay"],
+            }
+            optimizer_grouped_parameters.append(group_parameters)
+
+    AdamOptimizer = torch.optim.AdamW
+
+    optimizer = AdamOptimizer(
+        optimizer_grouped_parameters, lr=learning_rate, betas=(0.9, 0.999)
     )
 
     lr_scheduler = get_scheduler(
@@ -291,6 +328,10 @@ def main(
                 "per_device_train_batch_size": per_device_train_batch_size,
                 "zero_stage": zero_stage,
                 "seed": seed,
+                "train_dir": train_dir,
+                "skipped_ema_step": skipped_ema_step,
+                "weight_decay": weight_decay,
+                "hidden_dim": hidden_dim,
             },
         )
 

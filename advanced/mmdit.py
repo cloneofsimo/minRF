@@ -22,7 +22,9 @@ class MLP(nn.Module):
             out_dim = dim
 
         self.net = nn.Sequential(
-            nn.Linear(dim, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, out_dim)
+            nn.Linear(dim, hidden_dim, bias=False),
+            nn.GELU(),
+            nn.Linear(hidden_dim, out_dim, bias=False),
         )
 
     def forward(self, x):
@@ -164,7 +166,7 @@ class TimestepEmbedder(nn.Module):
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):
         half = dim // 2
-        freqs = torch.exp(
+        freqs = 1000 * torch.exp(
             -math.log(max_period) * torch.arange(start=0, end=half) / half
         ).to(t.device)
         args = t[:, None] * freqs[None]
@@ -209,7 +211,7 @@ class MMDiT(nn.Module):
             patch_size * patch_size * in_channels, dim
         )  # init linear for patchified image.
 
-        self.pe = nn.Parameter(torch.randn(1, max_seq, dim) * 0.02)
+        self.pe = nn.Parameter(torch.randn(1, max_seq, dim) * 0.1)
 
         self.layers = nn.ModuleList([])
         for idx in range(n_layers):
@@ -221,7 +223,7 @@ class MMDiT(nn.Module):
             dim, patch_size * patch_size * out_channels, bias=True
         )
 
-        self.final_modulation = nn.Sequential(
+        self.modF = nn.Sequential(
             nn.SiLU(),
             nn.Linear(global_conddim, 2 * dim, bias=True),
         )
@@ -231,21 +233,14 @@ class MMDiT(nn.Module):
 
         self.out_channels = out_channels
         self.patch_size = patch_size
-        self.apply(self._init_weights)
+
         for pn, p in self.named_parameters():
             if pn.endswith("w1o.weight") or pn.endswith("w2o.weight"):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers))
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.zeros_(module.bias)
-            torch.nn.init.ones_(module.weight)
+                # this is muP
+                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers * dim))
+            # if its modulation
+            if "mod" in pn:
+                nn.init.constant_(p, 0)
 
     def unpatchify(self, x):
         c = self.out_channels
@@ -285,7 +280,7 @@ class MMDiT(nn.Module):
         for layer in self.layers:
             c, x = layer(c, x, global_cond, **kwargs)
 
-        fshift, fscale = self.final_modulation(global_cond).chunk(2, dim=1)
+        fshift, fscale = self.modF(global_cond).chunk(2, dim=1)
 
         x = modulate(x, fshift, fscale)
         x = self.final_linear(x)
