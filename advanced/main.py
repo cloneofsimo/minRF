@@ -274,7 +274,7 @@ def main(
 
     torch.distributed.barrier()
     ## Config muP-learning rate.
-    no_decay_name_list = ["bias", "norm", 'c_vec_embedder', 'cond_seq_linear']
+    no_decay_name_list = ["bias", "norm", 'c_vec_embedder', 'cond_seq_linear', 'init_x_linear']
 
     optimizer_grouped_parameters = []
     final_optimizer_settings = {}
