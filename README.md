@@ -42,7 +42,7 @@ On 63'th epoch, your output should be something like:
 </p>
 
 
-# 2. *Massive* Rectified Flow
+# 2. *Massive* Rectified Flow, muP Support
 
 This is for gigachads who wants to train Imagenet instead. Don't worry! IMO Imagenet is the new MNIST, and we will use my [imagenet.int8](https://huggingface.co/datasets/cloneofsimo/imagenet.int8) dataset for this.
 
@@ -62,4 +62,12 @@ Run
 bash run.sh
 ```
 
-to train the model. This will train Imagenet from scratch.
+to train the model. This will train Imagenet from scratch, do a muP grid search to find the aligned basin for the loss function, you unlock the zero-shot LR transfer for Rectified Flow models!
+
+
+<p align="center">
+  <img src="advanced/image.png" alt="large" width="500">
+</p>
+
+This uses multiple techniques and codebases I have developed over the year. Its a natural mixture of [min-max-IN-dit](https://github.com/cloneofsimo/min-max-in-dit), [min-max-gpt](https://github.com/cloneofsimo/min-max-gpt), [ez-muP](https://github.com/cloneofsimo/ezmup)
+
