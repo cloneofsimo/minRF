@@ -3,7 +3,7 @@ export WORLD_SIZE=8 #$(nvidia-smi -L | wc -l)
 # lrs=(1e-4 2e-4 4e-4 8e-4)
 # widths=(64 128 256)
 loglr=(-8 -7 -6 -5 -4 -3)
-widths=(32)
+widths=(32 64 128 256)
 
 for width in "${widths[@]}"; do
     for loglr in "${loglr[@]}"; do
