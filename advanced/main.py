@@ -215,7 +215,7 @@ def main(
             "memory_efficient_linear": False,
         },
         "bfloat16": {"enabled": False},
-        "gradient_clipping": 1.0,
+        "gradient_clipping": 0.3,
     }
 
     torch.distributed.barrier()
@@ -231,6 +231,7 @@ def main(
                 in_channels=4,
                 out_channels=4,
                 dim=hidden_dim,
+                global_conddim=hidden_dim,
                 n_layers=6,
                 n_heads=8,
             ),
@@ -273,7 +274,7 @@ def main(
 
     torch.distributed.barrier()
     ## Config muP-learning rate.
-    no_decay_name_list = ["bias", "norm"]
+    no_decay_name_list = ["bias", "norm", 'c_vec_embedder', 'cond_seq_linear']
 
     optimizer_grouped_parameters = []
     final_optimizer_settings = {}
@@ -288,11 +289,10 @@ def main(
 
             # Define learning rate for specific types of params
 
-            is_embed = "embed" in n
             if "embed" in n or any(ndnl in n for ndnl in no_decay_name_list):
-                group_parameters["lr"] = learning_rate * (3.3 if is_embed else 1.0)
+                group_parameters["lr"] = learning_rate
             else:
-                group_parameters["lr"] = learning_rate * (256 / hidden_dim)
+                group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 
             group_parameters["params"] = [p]
             final_optimizer_settings[n] = {
@@ -310,7 +310,7 @@ def main(
     lr_scheduler = get_scheduler(
         name="linear",
         optimizer=optimizer,
-        num_warmup_steps=20,
+        num_warmup_steps=100,
         num_training_steps=num_train_epochs * math.ceil(len(dataloader)),
     )
 
@@ -329,7 +329,7 @@ def main(
 
     if global_rank == 0:
         wandb.init(
-            project="rf_in1k",
+            project="rf_in1k_mup",
             name=run_name,
             config={
                 "num_train_epochs": num_train_epochs,

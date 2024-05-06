@@ -203,8 +203,7 @@ class MMDiT(nn.Module):
 
         self.t_embedder = TimestepEmbedder(global_conddim)
         self.c_vec_embedder = MLP(cond_vector_dim, global_conddim)
-
-        self.cond_linear = nn.Linear(
+        self.cond_seq_linear = nn.Linear(
             cond_seq_dim, dim
         )  # linear for something like text sequence.
         self.init_x_linear = nn.Linear(
@@ -272,7 +271,7 @@ class MMDiT(nn.Module):
         # process conditions for MMDiT Blocks
         c_seq = conds["c_seq"]  # B, T_c, D_c
         c_vec = conds["c_vec"]  # B, D_gc
-        c = self.cond_linear(c_seq)  # B, T_c, D
+        c = self.cond_seq_linear(c_seq)  # B, T_c, D
         t_emb = self.t_embedder(t)  # B, D
 
         global_cond = self.c_vec_embedder(c_vec) + t_emb  # B, D
@@ -286,6 +285,18 @@ class MMDiT(nn.Module):
         x = self.final_linear(x)
         x = self.unpatchify(x)
         return x
+
+class MultiTokenEmbedding(nn.Module):
+    # make two embedding, one for each token, concat and return
+    def __init__(self, num_tokens, hidden_size):
+        super().__init__()
+        self.embedding1 = nn.Embedding(num_tokens, hidden_size)
+        self.embedding2 = nn.Embedding(num_tokens, hidden_size)
+
+    def forward(self, x):
+        emb1 = self.embedding1(x).unsqueeze(1)
+        emb2 = self.embedding2(x).unsqueeze(1)
+        return torch.cat([emb1, emb2], dim=1) # B, 2, D
 
 
 class MMDiT_for_IN1K(MMDiT):
@@ -318,13 +329,19 @@ class MMDiT_for_IN1K(MMDiT):
             max_seq,
         )
 
-    def forward(self, x, t, conds, **kwargs):
-        # one hot
-        conds_1 = F.one_hot(conds, num_classes=2048).unsqueeze(1).float()
-        conds_2 = F.one_hot(conds + 1024, num_classes=2048).unsqueeze(1).float()
-        conds_g = F.one_hot(conds, num_classes=1024).float()
+        # replace cond_seq_linear and c_vec_embedder, so they will both take discrete input.
+        self.c_vec_embedder = nn.Embedding(1024, global_conddim)
+        self.cond_seq_linear = MultiTokenEmbedding(1024, dim)
 
-        conds_dict = {"c_seq": torch.cat([conds_1, conds_2], dim=1), "c_vec": conds_g}
+        # init embedding with very small 0.03
+        nn.init.normal_(self.c_vec_embedder.weight, mean=0.0, std=0.1)
+        nn.init.normal_(self.cond_seq_linear.embedding1.weight, mean=0.0, std=0.1)
+        nn.init.normal_(self.cond_seq_linear.embedding2.weight, mean=0.0, std=0.1)
+
+
+    def forward(self, x, t, conds, **kwargs):
+
+        conds_dict = {"c_seq": conds, "c_vec": conds}
         return super(MMDiT_for_IN1K, self).forward(x, t, conds_dict, **kwargs)
 
 
