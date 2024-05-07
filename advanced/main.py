@@ -174,7 +174,7 @@ def main(
     run_name=None,
     train_dir="./vae_mds",
     skipped_ema_step=16,
-    weight_decay=0.01,
+    weight_decay=0.1,
     hidden_dim=256,
     save_dir="./ckpt",
 ):
@@ -274,7 +274,13 @@ def main(
 
     torch.distributed.barrier()
     ## Config muP-learning rate.
-    no_decay_name_list = ["bias", "norm", 'c_vec_embedder', 'cond_seq_linear', 'init_x_linear']
+    no_decay_name_list = [
+        "bias",
+        "norm",
+        "c_vec_embedder",
+        "cond_seq_linear",
+        "init_x_linear",
+    ]
 
     optimizer_grouped_parameters = []
     final_optimizer_settings = {}
@@ -290,7 +296,7 @@ def main(
             # Define learning rate for specific types of params
 
             if "embed" in n or any(ndnl in n for ndnl in no_decay_name_list):
-                group_parameters["lr"] = learning_rate
+                group_parameters["lr"] = learning_rate * 0.1
             else:
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 
@@ -310,8 +316,8 @@ def main(
     lr_scheduler = get_scheduler(
         name="linear",
         optimizer=optimizer,
-        num_warmup_steps=100,
-        num_training_steps=num_train_epochs * math.ceil(len(dataloader)),
+        num_warmup_steps=200,
+        num_training_steps=2000 * math.ceil(len(dataloader)),
     )
 
     rf.train()

@@ -12,23 +12,49 @@ def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
+def find_multiple(n: int, k: int) -> int:
+    if n % k == 0:
+        return n
+    return n + k - (n % k)
+
+
 class MLP(nn.Module):
-    def __init__(self, dim, hidden_dim=None, out_dim=None):
+    def __init__(self, dim, hidden_dim=None) -> None:
         super().__init__()
+        if hidden_dim is None:
+            hidden_dim = 4 * dim
 
-        if not hidden_dim:
-            hidden_dim = dim * 4
-        if not out_dim:
-            out_dim = dim
+        n_hidden = int(2 * hidden_dim / 3)
+        n_hidden = find_multiple(n_hidden, 256)
 
-        self.net = nn.Sequential(
-            nn.Linear(dim, hidden_dim, bias=False),
-            nn.GELU(),
-            nn.Linear(hidden_dim, out_dim, bias=False),
+        self.c_fc1 = nn.Linear(dim, n_hidden, bias=False)
+        self.c_fc2 = nn.Linear(dim, n_hidden, bias=False)
+        self.c_proj = nn.Linear(n_hidden, dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.silu(self.c_fc1(x)) * self.c_fc2(x)
+        x = self.c_proj(x)
+        return x
+
+
+class MultiHeadLayerNorm(nn.Module):
+    def __init__(self, hidden_size=None, eps=1e-5):
+        # Copy pasta from https://github.com/huggingface/transformers/blob/e5f71ecaae50ea476d1e12351003790273c4b2ed/src/transformers/models/cohere/modeling_cohere.py#L78
+
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        mean = hidden_states.mean(-1, keepdim=True)
+        variance = (hidden_states - mean).pow(2).mean(-1, keepdim=True)
+        hidden_states = (hidden_states - mean) * torch.rsqrt(
+            variance + self.variance_epsilon
         )
-
-    def forward(self, x):
-        return self.net(x)
+        hidden_states = self.weight.to(torch.float32) * hidden_states
+        return hidden_states.to(input_dtype)
 
 
 class DoubleAttention(nn.Module):
@@ -48,11 +74,11 @@ class DoubleAttention(nn.Module):
         self.w2v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
         self.w2o = nn.Linear(n_heads * self.head_dim, dim, bias=False)
 
-        self.q_norm1 = nn.LayerNorm(self.n_heads * self.head_dim)
-        self.k_norm1 = nn.LayerNorm(self.n_heads * self.head_dim)
+        self.q_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
+        self.k_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
 
-        self.q_norm2 = nn.LayerNorm(self.n_heads * self.head_dim)
-        self.k_norm2 = nn.LayerNorm(self.n_heads * self.head_dim)
+        self.q_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
+        self.k_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
 
     def forward(self, c, x):
 
@@ -61,18 +87,23 @@ class DoubleAttention(nn.Module):
         seqlen = seqlen1 + seqlen2
 
         cq, ck, cv = self.w1q(c), self.w1k(c), self.w1v(c)
+        cq = cq.view(bsz, seqlen1, self.n_heads, self.head_dim)
+        ck = ck.view(bsz, seqlen1, self.n_heads, self.head_dim)
+        cv = cv.view(bsz, seqlen1, self.n_heads, self.head_dim)
         cq, ck = self.q_norm1(cq), self.k_norm1(ck)
+
         xq, xk, xv = self.w2q(x), self.w2k(x), self.w2v(x)
+        xq = xq.view(bsz, seqlen2, self.n_heads, self.head_dim)
+        xk = xk.view(bsz, seqlen2, self.n_heads, self.head_dim)
+        xv = xv.view(bsz, seqlen2, self.n_heads, self.head_dim)
         xq, xk = self.q_norm2(xq), self.k_norm2(xk)
 
         # concat all
-        q = torch.cat((cq, xq), dim=1)
-        k = torch.cat((ck, xk), dim=1)
-        v = torch.cat((cv, xv), dim=1)
-
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)
-        k = k.view(bsz, seqlen, self.n_heads, self.head_dim)
-        v = v.view(bsz, seqlen, self.n_heads, self.head_dim)
+        q, k, v = (
+            torch.cat([cq, xq], dim=1),
+            torch.cat([ck, xk], dim=1),
+            torch.cat([cv, xv], dim=1),
+        )
 
         output = F.scaled_dot_product_attention(
             q.permute(0, 2, 1, 3),
@@ -286,6 +317,7 @@ class MMDiT(nn.Module):
         x = self.unpatchify(x)
         return x
 
+
 class MultiTokenEmbedding(nn.Module):
     # make two embedding, one for each token, concat and return
     def __init__(self, num_tokens, hidden_size):
@@ -296,7 +328,7 @@ class MultiTokenEmbedding(nn.Module):
     def forward(self, x):
         emb1 = self.embedding1(x).unsqueeze(1)
         emb2 = self.embedding2(x).unsqueeze(1)
-        return torch.cat([emb1, emb2], dim=1) # B, 2, D
+        return torch.cat([emb1, emb2], dim=1)  # B, 2, D
 
 
 class MMDiT_for_IN1K(MMDiT):
@@ -337,7 +369,6 @@ class MMDiT_for_IN1K(MMDiT):
         nn.init.normal_(self.c_vec_embedder.weight, mean=0.0, std=0.1)
         nn.init.normal_(self.cond_seq_linear.embedding1.weight, mean=0.0, std=0.1)
         nn.init.normal_(self.cond_seq_linear.embedding2.weight, mean=0.0, std=0.1)
-
 
     def forward(self, x, t, conds, **kwargs):
 
