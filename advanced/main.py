@@ -28,12 +28,22 @@ class RF(torch.nn.Module):
         super().__init__()
         self.model = model
         self.ln = ln
+        self.stratified = True
 
     def forward(self, x, cond):
         b = x.size(0)
         if self.ln:
-            nt = torch.randn((b,)).to(x.device)
-            t = torch.sigmoid(nt)
+            if self.stratified:
+                # stratified sampling of normals
+                # first stratified sample from uniform
+                quantiles = torch.linspace(0, 1, b + 1).to(x.device)
+                z = quantiles[:-1] + torch.rand((b,)).to(x.device) / b
+                # now transform to normal
+                z = torch.erfinv(2 * z - 1) * math.sqrt(2)
+                t = torch.sigmoid(z)
+            else:
+                nt = torch.randn((b,)).to(x.device)
+                t = torch.sigmoid(nt)
         else:
             t = torch.rand((b,)).to(x.device)
         texp = t.view([b, *([1] * len(x.shape[1:]))])
@@ -142,7 +152,7 @@ _encodings["uint8"] = uint8
 @click.option("--num_train_epochs", default=2, help="Number of training epochs")
 @click.option("--learning_rate", default=3e-3, help="Learning rate")
 @click.option("--offload", default=False, help="Offload")
-@click.option("--train_batch_size", default=1024, help="Total Train batch size")
+@click.option("--train_batch_size", default=256, help="Total Train batch size")
 @click.option(
     "--per_device_train_batch_size", default=128, help="Per device train batch size"
 )
