@@ -366,9 +366,15 @@ class MMDiT_for_IN1K(MMDiT):
         self.cond_seq_linear = MultiTokenEmbedding(1024, dim)
 
         # init embedding with very small 0.03
-        nn.init.normal_(self.c_vec_embedder.weight, mean=0.0, std=0.1)
-        nn.init.normal_(self.cond_seq_linear.embedding1.weight, mean=0.0, std=0.1)
-        nn.init.normal_(self.cond_seq_linear.embedding2.weight, mean=0.0, std=0.1)
+        nn.init.trunc_normal_(
+            self.c_vec_embedder.weight, mean=0.0, std=0.1, a=-0.2, b=0.2
+        )
+        nn.init.trunc_normal_(
+            self.cond_seq_linear.embedding1.weight, mean=0.0, std=0.1, a=-0.2, b=0.2
+        )
+        nn.init.trunc_normal_(
+            self.cond_seq_linear.embedding2.weight, mean=0.0, std=0.1, a=-0.2, b=0.2
+        )
 
     def forward(self, x, t, conds, **kwargs):
 
