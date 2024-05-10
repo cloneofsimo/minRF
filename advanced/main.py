@@ -73,7 +73,24 @@ class RF(torch.nn.Module):
             z = z - dt * vc
             images.append(z)
         return images
+    
+    def sample_with_xps(self, z, cond, null_cond=None, sample_steps=50, cfg=2.0):
+        b = z.size(0)
+        dt = 1.0 / sample_steps
+        dt = torch.tensor([dt] * b).to(z.device).view([b, *([1] * len(z.shape[1:]))])
+        images = [z]
+        for i in range(sample_steps, 0, -1):
+            t = i / sample_steps
+            t = torch.tensor([t] * b).to(z.device)
 
+            vc = self.model(z, t, cond)
+            if null_cond is not None:
+                vu = self.model(z, t, null_cond)
+                vc = vu + cfg * (vc - vu)
+            x = z - t * vc
+            z = z - dt * vc
+            images.append(x)
+        return images
 
 def _z3_params_to_fetch(param_list):
     return [
@@ -247,6 +264,7 @@ def main(
             ),
             True,
         ).cuda()
+        rf.load_state_dict(torch.load("/home/host/simo/ckpts/largerun/model_68801/ema2.pt", map_location="cpu"))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
