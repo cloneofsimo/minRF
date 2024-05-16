@@ -7,7 +7,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class Fp32LayerNorm(nn.LayerNorm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
+    def forward(self, input):
+        output = F.layer_norm(
+            input.float(),
+            self.normalized_shape,
+            self.weight.float() if self.weight is not None else None,
+            self.bias.float() if self.bias is not None else None,
+            self.eps,
+        )
+        return output.type_as(input)
+    
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
@@ -64,11 +77,13 @@ class DoubleAttention(nn.Module):
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
 
+        # this is for cond
         self.w1q = nn.Linear(dim, n_heads * self.head_dim, bias=False)
         self.w1k = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
         self.w1v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
         self.w1o = nn.Linear(n_heads * self.head_dim, dim, bias=False)
-
+        
+        # this is for x
         self.w2q = nn.Linear(dim, n_heads * self.head_dim, bias=False)
         self.w2k = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
         self.w2v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
@@ -123,8 +138,8 @@ class MMDiTBlock(nn.Module):
     def __init__(self, dim, heads=8, global_conddim=1024, is_last=False):
         super().__init__()
 
-        self.normC1 = nn.LayerNorm(dim)
-        self.normC2 = nn.LayerNorm(dim)
+        self.normC1 = Fp32LayerNorm(dim, bias = False)
+        self.normC2 = Fp32LayerNorm(dim, bias = False)
         if not is_last:
             self.mlpC = MLP(dim, hidden_dim=dim * 4)
             self.modC = nn.Sequential(
@@ -137,8 +152,8 @@ class MMDiTBlock(nn.Module):
                 nn.Linear(global_conddim, 2 * dim, bias=True),
             )
 
-        self.normX1 = nn.LayerNorm(dim)
-        self.normX2 = nn.LayerNorm(dim)
+        self.normX1 = Fp32LayerNorm(dim, bias = False)
+        self.normX2 = Fp32LayerNorm(dim, bias = False)
         self.mlpX = MLP(dim, hidden_dim=dim * 4)
         self.modX = nn.Sequential(
             nn.SiLU(),
@@ -233,9 +248,9 @@ class MMDiT(nn.Module):
         super().__init__()
 
         self.t_embedder = TimestepEmbedder(global_conddim)
-        self.c_vec_embedder = MLP(cond_vector_dim, global_conddim)
+        #self.c_vec_embedder = MLP(cond_vector_dim, global_conddim)
         self.cond_seq_linear = nn.Linear(
-            cond_seq_dim, dim
+            cond_seq_dim, dim, bias = False
         )  # linear for something like text sequence.
         self.init_x_linear = nn.Linear(
             patch_size * patch_size * in_channels, dim
@@ -272,6 +287,9 @@ class MMDiT(nn.Module):
             if "mod" in pn:
                 nn.init.constant_(p, 0)
 
+        # if cond_seq_linear
+        nn.init.constant_(self.cond_seq_linear.weight, 0)
+
     def unpatchify(self, x):
         c = self.out_channels
         p = self.patch_size
@@ -280,7 +298,7 @@ class MMDiT(nn.Module):
         x = torch.einsum("nhwpqc->nchpwq", x)
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
-
+    
     def patchify(self, x):
         B, C, H, W = x.size()
         x = x.view(
@@ -301,11 +319,11 @@ class MMDiT(nn.Module):
 
         # process conditions for MMDiT Blocks
         c_seq = conds["c_seq"]  # B, T_c, D_c
-        c_vec = conds["c_vec"]  # B, D_gc
+        #c_vec = conds["c_vec"]  # B, D_gc
         c = self.cond_seq_linear(c_seq)  # B, T_c, D
         t_emb = self.t_embedder(t)  # B, D
 
-        global_cond = self.c_vec_embedder(c_vec) + t_emb  # B, D
+        global_cond = t_emb  # B, D
 
         for layer in self.layers:
             c, x = layer(c, x, global_cond, **kwargs)
@@ -391,7 +409,17 @@ if __name__ == "__main__":
     # print(out.shape)
     # print(out)
 
-    model = MMDiT_for_IN1K()
+    model = MMDiT_for_IN1K(
+                in_channels=4,
+                out_channels=4,
+                dim=2048,
+                global_conddim=2048,
+                n_layers=48,
+                n_heads=8,
+            )
+    # print size
+    tot = sum([p.numel() for p in model.parameters() if p.requires_grad])
+    print(f'tot params {tot}, {tot // 1e6}M')
     x = torch.randn(2, 4, 32, 32)
     t = torch.randn(2)
     conds = torch.randint(0, 1000, (2,))

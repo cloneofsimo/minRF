@@ -10,6 +10,10 @@ import deepspeed
 import numpy as np
 import streaming.base.util as util
 import torch
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed import get_accelerator
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
@@ -28,7 +32,7 @@ class RF(torch.nn.Module):
         super().__init__()
         self.model = model
         self.ln = ln
-        self.stratified = True
+        self.stratified = False
 
     def forward(self, x, cond):
         b = x.size(0)
@@ -49,6 +53,9 @@ class RF(torch.nn.Module):
         texp = t.view([b, *([1] * len(x.shape[1:]))])
         z1 = torch.randn_like(x)
         zt = (1 - texp) * x + texp * z1
+
+        # make t, zt into same dtype as x
+        zt, t = zt.to(x.dtype), t.to(x.dtype)
         vtheta = self.model(zt, t, cond)
         batchwise_mse = ((z1 - x - vtheta) ** 2).mean(dim=list(range(1, len(x.shape))))
         tlist = batchwise_mse.detach().cpu().reshape(-1).tolist()
@@ -74,6 +81,7 @@ class RF(torch.nn.Module):
             images.append(z)
         return images
     
+    @torch.no_grad()
     def sample_with_xps(self, z, cond, null_cond=None, sample_steps=50, cfg=2.0):
         b = z.size(0)
         dt = 1.0 / sample_steps
@@ -87,10 +95,11 @@ class RF(torch.nn.Module):
             if null_cond is not None:
                 vu = self.model(z, t, null_cond)
                 vc = vu + cfg * (vc - vu)
-            x = z - t * vc
+            x = z - i * dt * vc
             z = z - dt * vc
             images.append(x)
         return images
+
 
 def _z3_params_to_fetch(param_list):
     return [
@@ -173,13 +182,13 @@ _encodings["uint8"] = uint8
 @click.option(
     "--per_device_train_batch_size", default=128, help="Per device train batch size"
 )
-@click.option("--zero_stage", default=1, help="Zero stage, from 0 to 3")
+@click.option("--zero_stage", default=2, help="Zero stage, from 0 to 3")
 @click.option("--seed", default=42, help="Seed for rng")
 @click.option("--run_name", default=None, help="Run name that will be used for wandb")
 @click.option("--train_dir", default="./vae_mds", help="Train dir that MDS can read")
 @click.option(
     "--skipped_ema_step",
-    default=16,
+    default=1024,
     help="Skipped EMA step. Karras EMA will save model every skipped_ema_step",
 )
 @click.option("--weight_decay", default=0.1, help="Weight decay")
@@ -187,6 +196,11 @@ _encodings["uint8"] = uint8
     "--hidden_dim",
     default=256,
     help="Hidden dim, this will mainly determine the model size",
+)
+@click.option(
+    "--n_layers",
+    default=12,
+    help="Number of layers, this will mainly determine the model size",
 )
 @click.option("--save_dir", default="./ckpt", help="Save dir for model")
 def main(
@@ -203,10 +217,10 @@ def main(
     skipped_ema_step=16,
     weight_decay=0.1,
     hidden_dim=256,
+    n_layers=12,
     save_dir="./ckpt",
 ):
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+
     # first, set the seed
     set_seed(seed)
 
@@ -241,7 +255,7 @@ def main(
             "stage3_prefetch_bucket_size": 3e7,
             "memory_efficient_linear": False,
         },
-        "bfloat16": {"enabled": False},
+        "bfloat16": {"enabled": True},
         "gradient_clipping": 0.3,
     }
 
@@ -259,12 +273,12 @@ def main(
                 out_channels=4,
                 dim=hidden_dim,
                 global_conddim=hidden_dim,
-                n_layers=6,
+                n_layers=n_layers,
                 n_heads=8,
             ),
             True,
         ).cuda()
-        rf.load_state_dict(torch.load("/home/host/simo/ckpts/largerun/model_68801/ema2.pt", map_location="cpu"))
+        #rf.load_state_dict(torch.load("/home/host/simo/ckpts/5b_2/model_57345/ema1.pt", map_location="cpu"))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
@@ -298,6 +312,7 @@ def main(
     dataloader = DataLoader(
         train_dataset,
         batch_size=per_device_train_batch_size,
+        num_workers=8,
     )
 
     torch.distributed.barrier()
@@ -344,8 +359,8 @@ def main(
     lr_scheduler = get_scheduler(
         name="linear",
         optimizer=optimizer,
-        num_warmup_steps=200,
-        num_training_steps=2000 * math.ceil(len(dataloader)),
+        num_warmup_steps=300,
+        num_training_steps=1e6
     )
 
     rf.train()
@@ -402,7 +417,6 @@ def main(
             model_engine.backward(loss)
             model_engine.step()
 
-            get_accelerator().empty_cache()
             norm = model_engine.get_global_grad_norm()
 
             global_step += 1
@@ -412,6 +426,24 @@ def main(
                 for t, l in batchwise_loss:
                     lossbin[int(t * 10)] += l
                     losscnt[int(t * 10)] += 1
+
+                if global_step % 16 == 0:
+                    wandb.log(
+                        {
+                            "train_loss": loss.item(),
+                            "train_grad_norm": norm,
+                            "value": value,
+                            "ema1_of_value": ema1_of_value,
+                            "ema2_of_value": ema2_of_value,
+                            **{
+                                f"lossbin_{i}": lossbin[i] / losscnt[i]
+                                for i in range(10)
+                            },
+                        }
+                    )
+                    # reset
+                    lossbin = {i: 0 for i in range(10)}
+                    losscnt = {i: 1e-6 for i in range(10)}
 
             if global_step % skipped_ema_step == 1:
 
@@ -450,29 +482,12 @@ def main(
                                 ema_state_dict2[k].half().flatten()[0].item()
                             )
 
-                    wandb.log(
-                        {
-                            "train_loss": loss.item(),
-                            "train_grad_norm": norm,
-                            "value": value,
-                            "ema1_of_value": ema1_of_value,
-                            "ema2_of_value": ema2_of_value,
-                            **{
-                                f"lossbin_{i}": lossbin[i] / losscnt[i]
-                                for i in range(10)
-                            },
-                        }
-                    )
-
-                    # reset
-                    lossbin = {i: 0 for i in range(10)}
-                    losscnt = {i: 1e-6 for i in range(10)}
-
+                    
             pbar.set_description(
                 f"norm: {norm}, loss: {loss.item()}, global_step: {global_step}"
             )
 
-            if global_step % 800 == 1:
+            if global_step % 4096 == 1:
                 # make save_dir
                 os.makedirs(save_dir, exist_ok=True)
 
