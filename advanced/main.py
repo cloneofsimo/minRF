@@ -14,8 +14,8 @@ import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed import get_accelerator
+from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 from streaming import StreamingDataset
 from streaming.base.format.mds.encodings import Encoding, _encodings
@@ -80,7 +80,7 @@ class RF(torch.nn.Module):
             z = z - dt * vc
             images.append(z)
         return images
-    
+
     @torch.no_grad()
     def sample_with_xps(self, z, cond, null_cond=None, sample_steps=50, cfg=2.0):
         b = z.size(0)
@@ -278,7 +278,7 @@ def main(
             ),
             True,
         ).cuda()
-        #rf.load_state_dict(torch.load("/home/host/simo/ckpts/5b_2/model_57345/ema1.pt", map_location="cpu"))
+        # rf.load_state_dict(torch.load("/home/host/simo/ckpts/5b_2/model_57345/ema1.pt", map_location="cpu"))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
@@ -357,10 +357,7 @@ def main(
     )
 
     lr_scheduler = get_scheduler(
-        name="linear",
-        optimizer=optimizer,
-        num_warmup_steps=300,
-        num_training_steps=1e6
+        name="linear", optimizer=optimizer, num_warmup_steps=300, num_training_steps=1e6
     )
 
     rf.train()
@@ -482,7 +479,6 @@ def main(
                                 ema_state_dict2[k].half().flatten()[0].item()
                             )
 
-                    
             pbar.set_description(
                 f"norm: {norm}, loss: {loss.item()}, global_step: {global_step}"
             )

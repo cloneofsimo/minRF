@@ -14,8 +14,8 @@ import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed import get_accelerator
+from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
 from streaming import StreamingDataset
 from streaming.base.format.mds.encodings import Encoding, _encodings
@@ -80,7 +80,7 @@ class RF(torch.nn.Module):
             z = z - dt * vc
             images.append(z)
         return images
-    
+
     @torch.no_grad()
     def sample_with_xps(self, z, cond, null_cond=None, sample_steps=50, cfg=2.0):
         b = z.size(0)
@@ -194,7 +194,11 @@ _encodings["uint8"] = uint8
 @click.option("--zero_stage", default=2, help="Zero stage, from 0 to 3")
 @click.option("--seed", default=42, help="Seed for rng")
 @click.option("--run_name", default=None, help="Run name that will be used for wandb")
-@click.option("--train_dir", default="/home/host/simo/capfusion_mds", help="Train dir that MDS can read")
+@click.option(
+    "--train_dir",
+    default="/home/host/simo/capfusion_mds",
+    help="Train dir that MDS can read",
+)
 @click.option(
     "--skipped_ema_step",
     default=1024,
@@ -212,6 +216,11 @@ _encodings["uint8"] = uint8
     help="Number of layers, this will mainly determine the model size",
 )
 @click.option("--save_dir", default="./ckpt", help="Save dir for model")
+@click.option(
+    "--lr_frozen_factor",
+    default=1.0,
+    help="Learning rate for (nearly) frozen layers. You would want this less than 1.",
+)
 @click.option("--note", default="hi", help="Note for wandb")
 def main(
     local_rank,
@@ -229,7 +238,8 @@ def main(
     hidden_dim=256,
     n_layers=12,
     save_dir="./ckpt",
-    note="hi"
+    lr_frozen_factor=1.0,
+    note="hi",
 ):
 
     # first, set the seed
@@ -290,7 +300,13 @@ def main(
             ),
             True,
         ).cuda()
-        rf.load_state_dict(torch.load("/home/host/simo/ckpts/5b_2/model_57345/ema1.pt", map_location="cpu"), strict = False)
+        rf.load_state_dict(
+            torch.load(
+                "/home/host/simo/ckpts/5b_cont/model_20481/pytorch_model.bin",
+                map_location="cpu",
+            ),
+            strict=False,
+        )
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
@@ -321,16 +337,20 @@ def main(
         f"Rank: {os.environ.get('RANK')}, Local Rank: {os.environ.get('LOCAL_WORLD_SIZE')}, Global Rank: {global_rank}"
     )
 
-    right_pad = lambda x: torch.cat([x, torch.zeros(128 - x.size(0), 1024).to(x.device)], dim=0)
+    right_pad = lambda x: torch.cat(
+        [x, torch.zeros(128 - x.size(0), 1024).to(x.device)], dim=0
+    )
 
     dataloader = DataLoader(
         train_dataset,
         batch_size=per_device_train_batch_size,
         num_workers=8,
         collate_fn=lambda x: {
-            "vae_output": torch.stack([torch.tensor(xx['vae_output']) for xx in x]),
-            "t5emb": torch.stack([right_pad(torch.tensor(xx['t5emb']).reshape(-1, 1024)) for xx in x]),
-        }
+            "vae_output": torch.stack([torch.tensor(xx["vae_output"]) for xx in x]),
+            "t5emb": torch.stack(
+                [right_pad(torch.tensor(xx["t5emb"]).reshape(-1, 1024)) for xx in x]
+            ),
+        },
     )
 
     torch.distributed.barrier()
@@ -340,9 +360,7 @@ def main(
         "norm",
     ]
 
-    small_train_name_list = [
-        'w2q', 'w2k', 'w2v', 'w2o', 'mlpX', 'modX'
-    ]
+    small_train_name_list = ["w2q", "w2k", "w2v", "w2o", "mlpX", "modX"]
 
     optimizer_grouped_parameters = []
     final_optimizer_settings = {}
@@ -363,7 +381,7 @@ def main(
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 
             if any(ndnl in n for ndnl in small_train_name_list):
-                group_parameters["lr"] = group_parameters["lr"] * 0.1
+                group_parameters["lr"] = group_parameters["lr"] * lr_frozen_factor
 
             group_parameters["params"] = [p]
             final_optimizer_settings[n] = {
@@ -379,10 +397,7 @@ def main(
     )
 
     lr_scheduler = get_scheduler(
-        name="linear",
-        optimizer=optimizer,
-        num_warmup_steps=300,
-        num_training_steps=1e6
+        name="linear", optimizer=optimizer, num_warmup_steps=300, num_training_steps=1e6
     )
 
     rf.train()
@@ -428,7 +443,7 @@ def main(
                 * 0.13025
             )
 
-            cond = batch['t5emb'].reshape(-1, 128, 1024).to(device).to(torch.bfloat16)
+            cond = batch["t5emb"].reshape(-1, 128, 1024).to(device).to(torch.bfloat16)
             # # randomly make y into index 1000, with prob 0.1
             # y = torch.where(
             #     torch.rand_like(y.float()) < 0.1,
@@ -436,7 +451,7 @@ def main(
             #     y,
             # )
 
-            loss, info = model_engine(x, {'c_seq' : cond})
+            loss, info = model_engine(x, {"c_seq": cond})
             model_engine.backward(loss)
             model_engine.step()
 
@@ -505,7 +520,6 @@ def main(
                                 ema_state_dict2[k].half().flatten()[0].item()
                             )
 
-                    
             pbar.set_description(
                 f"norm: {norm}, loss: {loss.item()}, global_step: {global_step}"
             )
