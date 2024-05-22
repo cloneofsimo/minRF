@@ -1,7 +1,7 @@
 # LavenderFlow 5.6B v0
 
 <p align="center">
-  <img src="./output_3_stage2.mp4" alt="large" width="600">
+    <img src="https://pbs.twimg.com/media/GOKPG_Ra0AELCOg?format=jpg&name=4096x4096" alt="large" width="600">
 </p>
 
 ✅Latent, MMDiT, muP, CFM, FSDP, recaped, 768x768, T5
