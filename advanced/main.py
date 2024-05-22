@@ -100,6 +100,28 @@ class RF(torch.nn.Module):
             images.append(x)
         return images
 
+    @torch.no_grad()
+    def sample_with_xps_tff(
+        self, z, cond, null_cond=None, sample_steps=50, cfg=2.0, tff=lambda x: x
+    ):
+        b = z.size(0)
+        dt = 1.0 / sample_steps
+        dt = torch.tensor([dt] * b).to(z.device).view([b, *([1] * len(z.shape[1:]))])
+        images = [z]
+        for i in range(sample_steps, 0, -1):
+            t = i / sample_steps
+            t = tff(t)
+            t = torch.tensor([t] * b).to(z.device)
+
+            vc = self.model(z, t, cond)
+            if null_cond is not None:
+                vu = self.model(z, t, null_cond)
+                vc = vu + cfg * (vc - vu)
+            x = z - i * dt * vc
+            z = z - dt * vc
+            images.append(x)
+        return images
+
 
 def _z3_params_to_fetch(param_list):
     return [

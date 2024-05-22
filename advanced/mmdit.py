@@ -128,6 +128,7 @@ class DoubleAttention(nn.Module):
             v.permute(0, 2, 1, 3),
             dropout_p=0.0,
             is_causal=False,
+            scale=1 / self.head_dim**0.5,
         ).permute(0, 2, 1, 3)
         output = output.flatten(-2)
         c, x = output.split([seqlen1, seqlen2], dim=1)
@@ -245,7 +246,7 @@ class MMDiT(nn.Module):
         global_conddim=1024,
         cond_seq_dim=2048,
         cond_vector_dim=1024,
-        max_seq=32 * 32,
+        max_seq=96 * 96,
     ):
         super().__init__()
 
@@ -291,6 +292,22 @@ class MMDiT(nn.Module):
 
         # if cond_seq_linear
         nn.init.constant_(self.cond_seq_linear.weight, 0)
+
+    @torch.no_grad()
+    def extend_pe(self, init_dim=(32, 32), target_dim=(64, 64)):
+        # extend pe
+        pe_data = self.pe.data.squeeze(0)[: init_dim[0] * init_dim[1]]
+
+        pe_as_2d = pe_data.view(init_dim[0], init_dim[1], -1).permute(2, 0, 1)
+
+        # now we need to extend this to target_dim. for this we will use interpolation.
+        # we will use bilinear interpolation.
+        # we will use torch.nn.functional.interpolate
+        pe_as_2d = F.interpolate(
+            pe_as_2d.unsqueeze(0), size=target_dim, mode="bilinear"
+        )
+        pe_new = pe_as_2d.squeeze(0).permute(1, 2, 0).flatten(0, 1)
+        self.pe.data = pe_new.unsqueeze(0).contiguous()
 
     def unpatchify(self, x):
         c = self.out_channels

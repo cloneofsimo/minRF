@@ -222,6 +222,7 @@ _encodings["uint8"] = uint8
     help="Learning rate for (nearly) frozen layers. You would want this less than 1.",
 )
 @click.option("--note", default="hi", help="Note for wandb")
+@click.option("--vaeres", default=96, help="VAE resolution. 96 x 96 by default")
 def main(
     local_rank,
     train_batch_size,
@@ -240,6 +241,7 @@ def main(
     save_dir="./ckpt",
     lr_frozen_factor=1.0,
     note="hi",
+    vaeres=96,
 ):
 
     # first, set the seed
@@ -302,11 +304,13 @@ def main(
         ).cuda()
         rf.load_state_dict(
             torch.load(
-                "/home/host/simo/ckpts/5b_cont/model_20481/pytorch_model.bin",
+                "rf_450k_ema1.pt",
                 map_location="cpu",
             ),
             strict=False,
         )
+
+        rf.model.extend_pe((32, 32), (vaeres, vaeres))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
@@ -330,6 +334,7 @@ def main(
         shuffle_algo="naive",
         num_canonical_nodes=1,
         batch_size=per_device_train_batch_size,
+        shuffle_seed=seed,
     )
 
     print(f"\n\n######-----Dataset loaded: {len(train_dataset)}")
@@ -439,7 +444,10 @@ def main(
         for batch in pbar:
 
             x = (
-                batch["vae_output"].reshape(-1, 4, 32, 32).to(device).to(torch.bfloat16)
+                batch["vae_output"]
+                .reshape(-1, 4, vaeres, vaeres)
+                .to(device)
+                .to(torch.bfloat16)
                 * 0.13025
             )
 

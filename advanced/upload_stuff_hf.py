@@ -8,13 +8,14 @@ if False:
     REPO_ID = "cloneofsimo/test_model"
     REPO_TYPE = "model"
 else:
-    CKPT_DIRS = "/home/host/simo/ckpts/5b_cont_2"
+    CKPT_DIRS = "/home/host/simo/ckpts/5b_highres"
     SLEEP_INTERVAL = 60
     REPO_ID = "cloneofsimo/lavenderflow-5.6B"
     REPO_TYPE = "model"
 
 # Initialize the API
 api = HfApi()
+
 
 def get_folder_size(folder_path):
     total_size = 0
@@ -25,32 +26,36 @@ def get_folder_size(folder_path):
                 total_size += os.path.getsize(fp)
     return total_size
 
+
 def upload_if_stable(folder_path, relpath, wait_time=300):
     """Waits for the folder size to stabilize before uploading."""
     size1 = get_folder_size(folder_path)
     time.sleep(wait_time)
     size2 = get_folder_size(folder_path)
-    
+
+    bname = f"highres-{relpath}"
+
     if size1 == size2:
         print(f"Uploading {folder_path} to Hugging Face Hub.")
         try:
-            create_branch(REPO_ID, repo_type=REPO_TYPE, branch=relpath)
+            create_branch(REPO_ID, repo_type=REPO_TYPE, branch=bname)
         except:
             pass
-                
+
         api.upload_folder(
             folder_path=folder_path,
             repo_id=REPO_ID,
             repo_type=REPO_TYPE,
-            revision=relpath,
+            revision=bname,
         )
         print(f"Uploaded {folder_path} successfully.")
 
         # delete the folder
         os.system(f"rm -rf {folder_path}")
         return True
-    
+
     return False
+
 
 def monitor_ckpt_dirs():
     known_folders = set()
@@ -68,10 +73,11 @@ def monitor_ckpt_dirs():
             if os.path.isdir(folder_path):
                 print(f"Detected new folder: {folder}")
                 relpath = os.path.relpath(folder_path, CKPT_DIRS)
-                if upload_if_stable(folder_path,relpath, SLEEP_INTERVAL):
+                if upload_if_stable(folder_path, relpath, SLEEP_INTERVAL):
                     known_folders.add(folder)
-        
+
         time.sleep(SLEEP_INTERVAL)
+
 
 if __name__ == "__main__":
     print("Starting to monitor for new model directories.")
