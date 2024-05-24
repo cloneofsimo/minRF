@@ -1,9 +1,9 @@
 deepspeed --hostfile=./hostfiles \
         main_t2i.py \
         --learning_rate 0.015 \
-        --hidden_dim 32 \
+        --hidden_dim 2048 \
         --n_layers 28 \
-        --run_name largerun \
+        --run_name node-2-6.5b-run \
         --save_dir "/home/ubuntu/ckpts" \
         --num_train_epochs 200 \
         --train_batch_size 256 \

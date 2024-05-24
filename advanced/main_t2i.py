@@ -167,7 +167,7 @@ class uint8(Encoding):
 
     def decode(self, data: bytes) -> Any:
         x = np.frombuffer(data, np.uint8).astype(np.float32)
-        return (x / 255.0 - 0.5) * 28.0
+        return x
 
 
 class np16(Encoding):
@@ -222,7 +222,10 @@ _encodings["uint8"] = uint8
     help="Learning rate for (nearly) frozen layers. You would want this less than 1.",
 )
 @click.option("--note", default="hi", help="Note for wandb")
-@click.option("--vaeres", default=96, help="VAE resolution. 96 x 96 by default")
+@click.option("--vaeres", default=32, help="VAE resolution. 32 x 32 by default")
+@click.option("--vae_col", default="vae_256x256_latents", help="Column name for VAE data")
+@click.option("--t5_col", default="t5_xl_embeddings", help="Column name for T5 data")
+@click.option("--cond_seq_dim", default=2048, help="Conditional sequence dimension, like T5")
 def main(
     local_rank,
     train_batch_size,
@@ -241,7 +244,10 @@ def main(
     save_dir="./ckpt",
     lr_frozen_factor=1.0,
     note="hi",
-    vaeres=96,
+    vaeres=32,
+    vae_col="vae_256x256_latents",
+    t5_col="t5_xl_embeddings",
+    cond_seq_dim=2048,
 ):
 
     # first, set the seed
@@ -296,7 +302,7 @@ def main(
                 global_conddim=hidden_dim,
                 n_layers=n_layers,
                 n_heads=8,
-                cond_seq_dim=1024,
+                cond_seq_dim=cond_seq_dim,
             ),
             True,
         ).cuda()
@@ -356,7 +362,7 @@ def main(
         split=None,
         shuffle=True,
         shuffle_algo="py1e",
-        num_canonical_nodes=2,
+        num_canonical_nodes=(int(os.environ["WORLD_SIZE"]) // 8),
         batch_size=per_device_train_batch_size,
         shuffle_seed=seed,
         shuffle_block_size = 10 * 4000
@@ -364,17 +370,21 @@ def main(
 
 
     right_pad = lambda x: torch.cat(
-        [x, torch.zeros(128 - x.size(0), 1024).to(x.device)], dim=0
+        [x, torch.zeros((77 * 3) - x.size(0), cond_seq_dim).to(x.device)], dim=0
     )
+
+    def dequantize_t5(tensor):
+        denorm_tensor = tensor.to(torch.float16) / 255
+        return (denorm_tensor * 0.5) - 0.25
 
     dataloader = DataLoader(
         train_dataset,
         batch_size=per_device_train_batch_size,
         num_workers=8,
         collate_fn=lambda x: {
-            "vae_output": torch.stack([torch.tensor(xx["vae_output"]) for xx in x]),
-            "t5emb": torch.stack(
-                [right_pad(torch.tensor(xx["t5emb"]).reshape(-1, 1024)) for xx in x]
+            vae_col: torch.stack([torch.tensor(xx[vae_col]) for xx in x]),
+            t5_col: torch.stack(
+                [right_pad(dequantize_t5(torch.tensor(xx[t5_col]).reshape(-1, cond_seq_dim))) for xx in x]
             ),
         },
     )
@@ -484,15 +494,19 @@ def main(
         for batch in pbar:
 
             x = (
-                batch["vae_output"]
+                batch[vae_col]
                 .reshape(-1, 4, vaeres, vaeres)
                 .to(device)
                 .to(torch.bfloat16)
                 * 0.13025
             )
 
-            cond = batch["t5emb"].reshape(-1, 128, 1024).to(device).to(torch.bfloat16)
-            
+            cond = (
+                (batch[t5_col].reshape(-1, 77 * 3, cond_seq_dim)[:, :128])
+                .to(device)
+                .to(torch.bfloat16)
+            )
+
             loss, info = model_engine(x, {"c_seq": cond})
             model_engine.backward(loss)
             model_engine.step()
