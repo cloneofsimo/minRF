@@ -262,8 +262,6 @@ def main(
 
     # set LOCAL_WORLD_SIZE to 8
 
-    os.environ["LOCAL_WORLD_SIZE"] = str(os.environ.get("WORLD_SIZE"))
-
     offload_device = "cpu" if offload else "none"
 
     ds_config = {
@@ -302,15 +300,15 @@ def main(
             ),
             True,
         ).cuda()
-        rf.load_state_dict(
-            torch.load(
-                "rf_450k_ema1.pt",
-                map_location="cpu",
-            ),
-            strict=False,
-        )
+        # rf.load_state_dict(
+        #     torch.load(
+        #         "rf_450k_ema1.pt",
+        #         map_location="cpu",
+        #     ),
+        #     strict=False,
+        # )
 
-        rf.model.extend_pe((32, 32), (vaeres, vaeres))
+        #rf.model.extend_pe((32, 32), (vaeres, vaeres))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
@@ -326,21 +324,44 @@ def main(
     # barrier
     torch.distributed.barrier()
 
+    os.environ['LOCAL_WORLD_SIZE'] = str(8)
+# WORLD_SIZE: Total number of processes to launch across all nodes.
+# LOCAL_WORLD_SIZE: Total number of processes to launch for each node.
+# RANK: Rank of the current process, which is the range between 0 to WORLD_SIZE - 1.
+# MASTER_ADDR: The hostname for the rank-zero process.
+# MASTER_PORT: The port for the rank-zero process.
+
+    for varname in [
+        "RANK",
+        "LOCAL_WORLD_SIZE",
+        "WORLD_SIZE",
+        "MASTER_ADDR",
+        "MASTER_PORT",
+    ]:
+        assert os.environ.get(varname) is not None, f"{varname} is not set"
+        print(f"{varname}: {os.environ.get(varname)}")
+
+    locdir = f'/tmp/mdstemp_0'
+    # cleanup if rank0
+    if local_rank == 0:
+        os.system(f"rm -rf {locdir}")
+        # make
+        os.makedirs(locdir, exist_ok=True)
+
+    torch.distributed.barrier()
+
     train_dataset = StreamingDataset(
-        local=train_dir,
-        remote=None,
+        local=locdir,
+        remote=train_dir,
         split=None,
         shuffle=True,
-        shuffle_algo="naive",
-        num_canonical_nodes=1,
+        shuffle_algo="py1e",
+        num_canonical_nodes=2,
         batch_size=per_device_train_batch_size,
         shuffle_seed=seed,
+        shuffle_block_size = 10 * 4000
     )
 
-    print(f"\n\n######-----Dataset loaded: {len(train_dataset)}")
-    print(
-        f"Rank: {os.environ.get('RANK')}, Local Rank: {os.environ.get('LOCAL_WORLD_SIZE')}, Global Rank: {global_rank}"
-    )
 
     right_pad = lambda x: torch.cat(
         [x, torch.zeros(128 - x.size(0), 1024).to(x.device)], dim=0
@@ -365,6 +386,10 @@ def main(
         "norm",
     ]
 
+    input_tensors = [
+        'cond_seq_linear', 'init_x_linear'
+    ]
+
     small_train_name_list = ["w2q", "w2k", "w2v", "w2o", "mlpX", "modX"]
 
     optimizer_grouped_parameters = []
@@ -382,6 +407,9 @@ def main(
 
             if "embed" in n or any(ndnl in n for ndnl in no_decay_name_list):
                 group_parameters["lr"] = learning_rate * 0.1
+            elif any(ipt in n for ipt in input_tensors):
+                input_dim = p.shape[0]
+                group_parameters["lr"] = learning_rate * (16 / input_dim)
             else:
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 
@@ -392,8 +420,20 @@ def main(
             final_optimizer_settings[n] = {
                 "lr": group_parameters["lr"],
                 "wd": group_parameters["weight_decay"],
+                'shape': str(list(p.shape))
             }
             optimizer_grouped_parameters.append(group_parameters)
+
+    if global_rank == 0:
+        # mkdir and dump optimizer settings
+        os.makedirs(save_dir, exist_ok=True)
+        
+        with open(f"{save_dir}/optimizer_settings.txt", "w") as f:
+            # format
+            for k, v in sorted(final_optimizer_settings.items()):
+                f.write(f"{k}: {v}\n")
+
+        
 
     AdamOptimizer = torch.optim.AdamW
 
@@ -452,13 +492,7 @@ def main(
             )
 
             cond = batch["t5emb"].reshape(-1, 128, 1024).to(device).to(torch.bfloat16)
-            # # randomly make y into index 1000, with prob 0.1
-            # y = torch.where(
-            #     torch.rand_like(y.float()) < 0.1,
-            #     (torch.ones_like(y) * 1000).long(),
-            #     y,
-            # )
-
+            
             loss, info = model_engine(x, {"c_seq": cond})
             model_engine.backward(loss)
             model_engine.step()
@@ -533,9 +567,7 @@ def main(
             )
 
             if global_step % 4096 == 1:
-                # make save_dir
-                os.makedirs(save_dir, exist_ok=True)
-
+        
                 os.makedirs(f"{save_dir}/model_{global_step}", exist_ok=True)
                 save_zero_three_model(
                     model_engine,
