@@ -73,7 +73,7 @@ class MultiHeadLayerNorm(nn.Module):
 
 
 class DoubleAttention(nn.Module):
-    def __init__(self, dim, n_heads):
+    def __init__(self, dim, n_heads, mh_qknorm = False):
         super().__init__()
 
         self.n_heads = n_heads
@@ -91,11 +91,11 @@ class DoubleAttention(nn.Module):
         self.w2v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
         self.w2o = nn.Linear(n_heads * self.head_dim, dim, bias=False)
 
-        self.q_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
-        self.k_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
-
-        self.q_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
-        self.k_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim))
+        self.q_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
+        self.k_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
+ 
+        self.q_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
+        self.k_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
 
     def forward(self, c, x):
 
@@ -259,7 +259,7 @@ class MMDiT(nn.Module):
             patch_size * patch_size * in_channels, dim
         )  # init linear for patchified image.
 
-        self.pe = nn.Parameter(torch.randn(1, max_seq, dim) * 0.1)
+        self.positional_encoding = nn.Parameter(torch.randn(1, max_seq, dim) * 0.1)
 
         self.layers = nn.ModuleList([])
         for idx in range(n_layers):
@@ -283,9 +283,9 @@ class MMDiT(nn.Module):
         self.patch_size = patch_size
 
         for pn, p in self.named_parameters():
-            if pn.endswith("w1o.weight") or pn.endswith("w2o.weight"):
-                # this is muP
-                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers * dim))
+            # if pn.endswith("w1o.weight") or pn.endswith("w2o.weight"):
+            #     # this is muP
+            #     nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers * dim))
             # if its modulation
             if "mod" in pn:
                 nn.init.constant_(p, 0)
@@ -296,7 +296,7 @@ class MMDiT(nn.Module):
     @torch.no_grad()
     def extend_pe(self, init_dim=(32, 32), target_dim=(64, 64)):
         # extend pe
-        pe_data = self.pe.data.squeeze(0)[: init_dim[0] * init_dim[1]]
+        pe_data = self.positional_encoding.data.squeeze(0)[: init_dim[0] * init_dim[1]]
 
         pe_as_2d = pe_data.view(init_dim[0], init_dim[1], -1).permute(2, 0, 1)
 
@@ -307,7 +307,7 @@ class MMDiT(nn.Module):
             pe_as_2d.unsqueeze(0), size=target_dim, mode="bilinear"
         )
         pe_new = pe_as_2d.squeeze(0).permute(1, 2, 0).flatten(0, 1)
-        self.pe.data = pe_new.unsqueeze(0).contiguous()
+        self.positional_encoding.data = pe_new.unsqueeze(0).contiguous()
 
     def unpatchify(self, x):
         c = self.out_channels
@@ -334,7 +334,7 @@ class MMDiT(nn.Module):
     def forward(self, x, t, conds, **kwargs):
         # patchify x, add PE
         x = self.init_x_linear(self.patchify(x))  # B, T_x, D
-        x = x + self.pe[:, : x.size(1)]
+        x = x + self.positional_encoding[:, : x.size(1)]
 
         # process conditions for MMDiT Blocks
         c_seq = conds["c_seq"]  # B, T_c, D_c

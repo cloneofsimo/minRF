@@ -484,7 +484,7 @@ def main(
                     ema1_of_value = None
                     ema2_of_value = None
 
-                    for k, v in current_state_dict.items():
+                    for k, v in sorted(current_state_dict.items()):
                         ema_state_dict1[k] = (
                             BETA1 * ema_state_dict1[k] + (1 - BETA1) * v
                         )
@@ -500,6 +500,7 @@ def main(
                             ema2_of_value = (
                                 ema_state_dict2[k].half().flatten()[0].item()
                             )
+        
 
             pbar.set_description(
                 f"norm: {norm}, loss: {loss.item()}, global_step: {global_step}"

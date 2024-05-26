@@ -25,6 +25,97 @@ from transformers import get_scheduler
 
 import wandb
 from mmdit import MMDiT
+import pandas as pd
+import plotly.express as px
+import re
+
+@torch.no_grad()
+def log_dif(model_cur_sd, model_prev_sd):
+    # Initialize a new run
+    
+    # Create lists to store data for the plot
+    layer_names = []
+    std_devs = []
+    l1_norms = []
+    param_counts = []
+    colors = []
+    markers = []
+
+    # Iterate over the parameters and compute necessary metrics
+    for name, param in model_cur_sd.items():
+        if name in model_prev_sd:
+            prev_param = model_prev_sd[name]
+            std_dev = param.std().item()
+            l1_norm = torch.abs(param - prev_param).mean().item()
+            param_count = param.numel()
+
+            # Determine color based on the criteria using regex
+            layer_match = re.match(r'.*\.layers\.(\d+)(?:\..*)?$', name)
+            
+            if layer_match:
+                layer_num = int(layer_match.group(1))
+                colors.append(layer_num)
+            else:
+                colors.append(-1)
+
+            # Determine marker type
+            if param.ndim == 1:
+                markers.append('x')
+            else:
+                markers.append('circle')
+
+            layer_names.append(name)
+            std_devs.append(std_dev)
+            l1_norms.append(np.log1p(l1_norm))  # log(1 + x) transformation
+            param_counts.append(np.log(param_count))
+
+    # Create a DataFrame for the plot
+    df = pd.DataFrame({
+        "Layer Name": layer_names,
+        "Standard Deviation": std_devs,
+        "L1 Norm of Changes (log scale)": l1_norms,
+        "Parameter Count (log)": param_counts,
+        "Color": colors,
+        "Marker": markers
+    })
+
+    # Determine the number of layers
+    max_layer_num = df[df["Color"] != -1]["Color"].max()
+    
+    # Create a color scale for the layers (yellow to red)
+    color_scale = px.colors.sequential.YlOrRd
+    color_discrete_map = {i: color_scale[int(i * (len(color_scale) - 1) / max_layer_num)] for i in range(int(max_layer_num) + 1)}
+    color_discrete_map[-1] = "blue"  # Blue for non-layer parameters
+
+    # Create Plotly figure
+    fig = px.scatter(
+        df,
+        x="Standard Deviation",
+        y="L1 Norm of Changes (log scale)",
+        size="Parameter Count (log)",
+        color="Color",
+        hover_name="Layer Name",
+        title="Model Weight Distribution and Changes",
+        symbol="Marker",
+        color_discrete_map=color_discrete_map,
+        opacity=0.7
+    )
+
+    #
+
+    table = wandb.Table(columns=["plotly_figure"])
+
+    # Create path for Plotly figure
+    path_to_plotly_html = "./plotly_figure.html"
+
+    # Write Plotly figure to HTML
+    fig.write_html(path_to_plotly_html, auto_play=False)
+
+    # Add Plotly figure as HTML file into Table
+    table.add_data(wandb.Html(path_to_plotly_html))
+
+    # Log Table
+    wandb.log({"weight_distribution_changes": table})
 
 
 class RF(torch.nn.Module):
@@ -317,7 +408,12 @@ def main(
         #rf.model.extend_pe((32, 32), (vaeres, vaeres))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
-    ema_state_dict2 = extract_model_state_dict_deepspeed(rf, global_rank)
+    ema_state_dict2 = {
+        k: v.detach().cpu().float().clone() for k, v in ema_state_dict1.items()
+    }
+    prv_state_dict = {
+        k: v.detach().cpu().float().clone() for k, v in ema_state_dict1.items()
+    }
 
     total_params = sum(p.numel() for p in rf.parameters())
     size_in_bytes = total_params * 4
@@ -365,7 +461,8 @@ def main(
         num_canonical_nodes=(int(os.environ["WORLD_SIZE"]) // 8),
         batch_size=per_device_train_batch_size,
         shuffle_seed=seed,
-        shuffle_block_size = 10 * 4000
+        shuffle_block_size = 10 * 4000,
+        cache_limit='100gb'
     )
 
 
@@ -394,6 +491,7 @@ def main(
     no_decay_name_list = [
         "bias",
         "norm",
+        "positional_encoding"
     ]
 
     input_tensors = [
@@ -415,10 +513,10 @@ def main(
 
             # Define learning rate for specific types of params
 
-            if "embed" in n or any(ndnl in n for ndnl in no_decay_name_list):
+            if any(ndnl in n for ndnl in no_decay_name_list):
                 group_parameters["lr"] = learning_rate * 0.1
             elif any(ipt in n for ipt in input_tensors):
-                input_dim = p.shape[0]
+                input_dim = p.shape[-1]
                 group_parameters["lr"] = learning_rate * (16 / input_dim)
             else:
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
@@ -470,7 +568,7 @@ def main(
 
     if global_rank == 0:
         wandb.init(
-            project="rf_t2i_mup",
+            project="6.5b_t2i_mup",
             name=run_name,
             config={
                 "num_train_epochs": num_train_epochs,
@@ -502,7 +600,7 @@ def main(
             )
 
             cond = (
-                (batch[t5_col].reshape(-1, 77 * 3, cond_seq_dim)[:, :128])
+                (batch[t5_col].reshape(-1, 77 * 3, cond_seq_dim))[:, :128, :]
                 .to(device)
                 .to(torch.bfloat16)
             )
@@ -524,13 +622,13 @@ def main(
                 if global_step % 16 == 0:
                     wandb.log(
                         {
-                            "train_loss": loss.item(),
-                            "train_grad_norm": norm,
-                            "value": value,
-                            "ema1_of_value": ema1_of_value,
-                            "ema2_of_value": ema2_of_value,
+                            "train/avg_loss": sum(lossbin.values()) / sum(losscnt.values()),
+                            "train/grad_norm": norm,
+                            "value/rawval": value,
+                            "value/ema1val": ema1_of_value,
+                            "value/ema2val": ema2_of_value,
                             **{
-                                f"lossbin_{i}": lossbin[i] / losscnt[i]
+                                f"loss/bin_{i}": lossbin[i] / losscnt[i]
                                 for i in range(10)
                             },
                         }
@@ -544,7 +642,13 @@ def main(
                 current_state_dict = extract_model_state_dict_deepspeed(rf, global_rank)
 
                 if global_rank == 0:
+                    
+                    # log
+                    log_dif(current_state_dict, prv_state_dict)
 
+                    prv_state_dict = {
+                        k: v.detach().cpu().float().clone() for k, v in current_state_dict.items()
+                    }
                     # update ema.
                     BETA1 = (1 - 1 / global_step) ** (1 + 16)
                     BETA2 = (1 - 1 / global_step) ** (1 + 9)
