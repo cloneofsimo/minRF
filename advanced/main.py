@@ -500,7 +500,6 @@ def main(
                             ema2_of_value = (
                                 ema_state_dict2[k].half().flatten()[0].item()
                             )
-        
 
             pbar.set_description(
                 f"norm: {norm}, loss: {loss.item()}, global_step: {global_step}"

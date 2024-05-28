@@ -73,7 +73,7 @@ class MultiHeadLayerNorm(nn.Module):
 
 
 class DoubleAttention(nn.Module):
-    def __init__(self, dim, n_heads, mh_qknorm = False):
+    def __init__(self, dim, n_heads, mh_qknorm=False):
         super().__init__()
 
         self.n_heads = n_heads
@@ -91,11 +91,27 @@ class DoubleAttention(nn.Module):
         self.w2v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
         self.w2o = nn.Linear(n_heads * self.head_dim, dim, bias=False)
 
-        self.q_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
-        self.k_norm1 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
- 
-        self.q_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
-        self.k_norm2 = MultiHeadLayerNorm((self.n_heads, self.head_dim)) if mh_qknorm else Fp32LayerNorm(self.head_dim, bias=False)
+        self.q_norm1 = (
+            MultiHeadLayerNorm((self.n_heads, self.head_dim))
+            if mh_qknorm
+            else Fp32LayerNorm(self.head_dim, bias=False)
+        )
+        self.k_norm1 = (
+            MultiHeadLayerNorm((self.n_heads, self.head_dim))
+            if mh_qknorm
+            else Fp32LayerNorm(self.head_dim, bias=False)
+        )
+
+        self.q_norm2 = (
+            MultiHeadLayerNorm((self.n_heads, self.head_dim))
+            if mh_qknorm
+            else Fp32LayerNorm(self.head_dim, bias=False)
+        )
+        self.k_norm2 = (
+            MultiHeadLayerNorm((self.n_heads, self.head_dim))
+            if mh_qknorm
+            else Fp32LayerNorm(self.head_dim, bias=False)
+        )
 
     def forward(self, c, x):
 
@@ -147,12 +163,12 @@ class MMDiTBlock(nn.Module):
             self.mlpC = MLP(dim, hidden_dim=dim * 4)
             self.modC = nn.Sequential(
                 nn.SiLU(),
-                nn.Linear(global_conddim, 6 * dim, bias=True),
+                nn.Linear(global_conddim, 6 * dim, bias=False),
             )
         else:
             self.modC = nn.Sequential(
                 nn.SiLU(),
-                nn.Linear(global_conddim, 2 * dim, bias=True),
+                nn.Linear(global_conddim, 2 * dim, bias=False),
             )
 
         self.normX1 = Fp32LayerNorm(dim, bias=False)
@@ -160,7 +176,7 @@ class MMDiTBlock(nn.Module):
         self.mlpX = MLP(dim, hidden_dim=dim * 4)
         self.modX = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(global_conddim, 6 * dim, bias=True),
+            nn.Linear(global_conddim, 6 * dim, bias=False),
         )
 
         self.attn = DoubleAttention(dim, heads)
@@ -260,6 +276,7 @@ class MMDiT(nn.Module):
         )  # init linear for patchified image.
 
         self.positional_encoding = nn.Parameter(torch.randn(1, max_seq, dim) * 0.1)
+        self.register_tokens = nn.Parameter(torch.randn(1, 8, dim) * 0.02)
 
         self.layers = nn.ModuleList([])
         for idx in range(n_layers):
@@ -268,16 +285,16 @@ class MMDiT(nn.Module):
             )
 
         self.final_linear = nn.Linear(
-            dim, patch_size * patch_size * out_channels, bias=True
+            dim, patch_size * patch_size * out_channels, bias=False
         )
 
         self.modF = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(global_conddim, 2 * dim, bias=True),
+            nn.Linear(global_conddim, 2 * dim, bias=False),
         )
         # # init zero
         nn.init.constant_(self.final_linear.weight, 0)
-        nn.init.constant_(self.final_linear.bias, 0)
+        # nn.init.constant_(self.final_linear.bias, 0)
 
         self.out_channels = out_channels
         self.patch_size = patch_size
@@ -340,6 +357,8 @@ class MMDiT(nn.Module):
         c_seq = conds["c_seq"]  # B, T_c, D_c
         # c_vec = conds["c_vec"]  # B, D_gc
         c = self.cond_seq_linear(c_seq)  # B, T_c, D
+        c = torch.cat([self.register_tokens.repeat(c.size(0), 1, 1), c], dim=1)
+
         t_emb = self.t_embedder(t)  # B, D
 
         global_cond = t_emb  # B, D

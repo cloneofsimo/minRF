@@ -17,7 +17,7 @@ torch.backends.cudnn.allow_tf32 = True
 from deepspeed import get_accelerator
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
-from streaming import StreamingDataset
+from streaming import StreamingDataset, Stream
 from streaming.base.format.mds.encodings import Encoding, _encodings
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -29,10 +29,11 @@ import pandas as pd
 import plotly.express as px
 import re
 
+
 @torch.no_grad()
 def log_dif(model_cur_sd, model_prev_sd):
     # Initialize a new run
-    
+
     # Create lists to store data for the plot
     layer_names = []
     std_devs = []
@@ -50,8 +51,8 @@ def log_dif(model_cur_sd, model_prev_sd):
             param_count = param.numel()
 
             # Determine color based on the criteria using regex
-            layer_match = re.match(r'.*\.layers\.(\d+)(?:\..*)?$', name)
-            
+            layer_match = re.match(r".*\.layers\.(\d+)(?:\..*)?$", name)
+
             if layer_match:
                 layer_num = int(layer_match.group(1))
                 colors.append(layer_num)
@@ -60,9 +61,9 @@ def log_dif(model_cur_sd, model_prev_sd):
 
             # Determine marker type
             if param.ndim == 1:
-                markers.append('x')
+                markers.append("x")
             else:
-                markers.append('circle')
+                markers.append("circle")
 
             layer_names.append(name)
             std_devs.append(std_dev)
@@ -70,21 +71,26 @@ def log_dif(model_cur_sd, model_prev_sd):
             param_counts.append(np.log(param_count))
 
     # Create a DataFrame for the plot
-    df = pd.DataFrame({
-        "Layer Name": layer_names,
-        "Standard Deviation": std_devs,
-        "L1 Norm of Changes (log scale)": l1_norms,
-        "Parameter Count (log)": param_counts,
-        "Color": colors,
-        "Marker": markers
-    })
+    df = pd.DataFrame(
+        {
+            "Layer Name": layer_names,
+            "Standard Deviation": std_devs,
+            "L1 Norm of Changes (log scale)": l1_norms,
+            "Parameter Count (log)": param_counts,
+            "Color": colors,
+            "Marker": markers,
+        }
+    )
 
     # Determine the number of layers
     max_layer_num = df[df["Color"] != -1]["Color"].max()
-    
+
     # Create a color scale for the layers (yellow to red)
     color_scale = px.colors.sequential.YlOrRd
-    color_discrete_map = {i: color_scale[int(i * (len(color_scale) - 1) / max_layer_num)] for i in range(int(max_layer_num) + 1)}
+    color_discrete_map = {
+        i: color_scale[int(i * (len(color_scale) - 1) / max_layer_num)]
+        for i in range(int(max_layer_num) + 1)
+    }
     color_discrete_map[-1] = "blue"  # Blue for non-layer parameters
 
     # Create Plotly figure
@@ -98,7 +104,7 @@ def log_dif(model_cur_sd, model_prev_sd):
         title="Model Weight Distribution and Changes",
         symbol="Marker",
         color_discrete_map=color_discrete_map,
-        opacity=0.7
+        opacity=0.7,
     )
 
     #
@@ -314,9 +320,13 @@ _encodings["uint8"] = uint8
 )
 @click.option("--note", default="hi", help="Note for wandb")
 @click.option("--vaeres", default=32, help="VAE resolution. 32 x 32 by default")
-@click.option("--vae_col", default="vae_256x256_latents", help="Column name for VAE data")
+@click.option(
+    "--vae_col", default="vae_256x256_latents", help="Column name for VAE data"
+)
 @click.option("--t5_col", default="t5_xl_embeddings", help="Column name for T5 data")
-@click.option("--cond_seq_dim", default=2048, help="Conditional sequence dimension, like T5")
+@click.option(
+    "--cond_seq_dim", default=2048, help="Conditional sequence dimension, like T5"
+)
 def main(
     local_rank,
     train_batch_size,
@@ -374,7 +384,7 @@ def main(
             "memory_efficient_linear": False,
         },
         "bfloat16": {"enabled": True},
-        "gradient_clipping": 0.3,
+        "gradient_clipping": 1.0,
     }
 
     torch.distributed.barrier()
@@ -397,15 +407,15 @@ def main(
             ),
             True,
         ).cuda()
-        # rf.load_state_dict(
-        #     torch.load(
-        #         "rf_450k_ema1.pt",
-        #         map_location="cpu",
-        #     ),
-        #     strict=False,
-        # )
+        rf.load_state_dict(
+            torch.load(
+                "/home/ubuntu/ckpts/model_32769/ema1.pt",
+                map_location="cpu",
+            ),
+            strict=False,
+        )
 
-        #rf.model.extend_pe((32, 32), (vaeres, vaeres))
+        # rf.model.extend_pe((32, 32), (vaeres, vaeres))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = {
@@ -426,12 +436,12 @@ def main(
     # barrier
     torch.distributed.barrier()
 
-    os.environ['LOCAL_WORLD_SIZE'] = str(8)
-# WORLD_SIZE: Total number of processes to launch across all nodes.
-# LOCAL_WORLD_SIZE: Total number of processes to launch for each node.
-# RANK: Rank of the current process, which is the range between 0 to WORLD_SIZE - 1.
-# MASTER_ADDR: The hostname for the rank-zero process.
-# MASTER_PORT: The port for the rank-zero process.
+    os.environ["LOCAL_WORLD_SIZE"] = str(8)
+    # WORLD_SIZE: Total number of processes to launch across all nodes.
+    # LOCAL_WORLD_SIZE: Total number of processes to launch for each node.
+    # RANK: Rank of the current process, which is the range between 0 to WORLD_SIZE - 1.
+    # MASTER_ADDR: The hostname for the rank-zero process.
+    # MASTER_PORT: The port for the rank-zero process.
 
     for varname in [
         "RANK",
@@ -443,7 +453,7 @@ def main(
         assert os.environ.get(varname) is not None, f"{varname} is not set"
         print(f"{varname}: {os.environ.get(varname)}")
 
-    locdir = f'/tmp/mdstemp_0'
+    locdir = f"/tmp/mdstemp_0"
     # cleanup if rank0
     if local_rank == 0:
         os.system(f"rm -rf {locdir}")
@@ -451,20 +461,48 @@ def main(
         os.makedirs(locdir, exist_ok=True)
 
     torch.distributed.barrier()
+    if True:
+        train_dataset = StreamingDataset(
+            local=locdir,
+            remote=train_dir,
+            split=None,
+            shuffle=True,
+            shuffle_algo="py1e",
+            num_canonical_nodes=(int(os.environ["WORLD_SIZE"]) // 8),
+            batch_size=per_device_train_batch_size,
+            shuffle_seed=seed,
+            shuffle_block_size=10 * 4000,
+            cache_limit="100gb",
+        )
+    else:
+        streams = []
+        for idx in range(8):
+            locdir = f"/tmp/mdstemp_{idx}"
+            # cleanup if rank0
+            if local_rank == 0:
+                os.system(f"rm -rf {locdir}")
+                # make
+                os.makedirs(locdir, exist_ok=True)
 
-    train_dataset = StreamingDataset(
-        local=locdir,
-        remote=train_dir,
-        split=None,
-        shuffle=True,
-        shuffle_algo="py1e",
-        num_canonical_nodes=(int(os.environ["WORLD_SIZE"]) // 8),
-        batch_size=per_device_train_batch_size,
-        shuffle_seed=seed,
-        shuffle_block_size = 10 * 4000,
-        cache_limit='100gb'
-    )
+            stream = Stream(
+                remote=f"/jfs/datacomp-1b-0-10k/{idx}",
+                local=locdir,
+                proportion=1 / 8,
+            )
 
+            streams.append(stream)
+
+        train_dataset = StreamingDataset(
+            streams=streams,
+            shuffle=True,
+            shuffle_algo="py1e",
+            num_canonical_nodes=(int(os.environ["WORLD_SIZE"]) // 8),
+            batch_size=per_device_train_batch_size,
+            shuffle_seed=seed,
+            shuffle_block_size=20 * 4000,
+            cache_limit="100gb",
+            predownload=2048,
+        )
 
     right_pad = lambda x: torch.cat(
         [x, torch.zeros((77 * 3) - x.size(0), cond_seq_dim).to(x.device)], dim=0
@@ -481,22 +519,23 @@ def main(
         collate_fn=lambda x: {
             vae_col: torch.stack([torch.tensor(xx[vae_col]) for xx in x]),
             t5_col: torch.stack(
-                [right_pad(dequantize_t5(torch.tensor(xx[t5_col]).reshape(-1, cond_seq_dim))) for xx in x]
+                [
+                    right_pad(
+                        dequantize_t5(
+                            torch.tensor(xx[t5_col]).reshape(-1, cond_seq_dim)
+                        )
+                    )
+                    for xx in x
+                ]
             ),
         },
     )
 
     torch.distributed.barrier()
     ## Config muP-learning rate.
-    no_decay_name_list = [
-        "bias",
-        "norm",
-        "positional_encoding"
-    ]
+    no_decay_name_list = ["bias", "norm", "positional_encoding"]
 
-    input_tensors = [
-        'cond_seq_linear', 'init_x_linear'
-    ]
+    input_tensors = ["cond_seq_linear", "init_x_linear"]
 
     small_train_name_list = ["w2q", "w2k", "w2v", "w2o", "mlpX", "modX"]
 
@@ -514,7 +553,7 @@ def main(
             # Define learning rate for specific types of params
 
             if any(ndnl in n for ndnl in no_decay_name_list):
-                group_parameters["lr"] = learning_rate * 0.1
+                group_parameters["lr"] = learning_rate * 0.033
             elif any(ipt in n for ipt in input_tensors):
                 input_dim = p.shape[-1]
                 group_parameters["lr"] = learning_rate * (16 / input_dim)
@@ -528,25 +567,23 @@ def main(
             final_optimizer_settings[n] = {
                 "lr": group_parameters["lr"],
                 "wd": group_parameters["weight_decay"],
-                'shape': str(list(p.shape))
+                "shape": str(list(p.shape)),
             }
             optimizer_grouped_parameters.append(group_parameters)
 
     if global_rank == 0:
         # mkdir and dump optimizer settings
         os.makedirs(save_dir, exist_ok=True)
-        
+
         with open(f"{save_dir}/optimizer_settings.txt", "w") as f:
             # format
             for k, v in sorted(final_optimizer_settings.items()):
                 f.write(f"{k}: {v}\n")
 
-        
-
     AdamOptimizer = torch.optim.AdamW
 
     optimizer = AdamOptimizer(
-        optimizer_grouped_parameters, lr=learning_rate, betas=(0.9, 0.999)
+        optimizer_grouped_parameters, lr=learning_rate, betas=(0.9, 0.95)
     )
 
     lr_scheduler = get_scheduler(
@@ -622,7 +659,8 @@ def main(
                 if global_step % 16 == 0:
                     wandb.log(
                         {
-                            "train/avg_loss": sum(lossbin.values()) / sum(losscnt.values()),
+                            "train/avg_loss": sum(lossbin.values())
+                            / sum(losscnt.values()),
                             "train/grad_norm": norm,
                             "value/rawval": value,
                             "value/ema1val": ema1_of_value,
@@ -642,12 +680,13 @@ def main(
                 current_state_dict = extract_model_state_dict_deepspeed(rf, global_rank)
 
                 if global_rank == 0:
-                    
+
                     # log
                     log_dif(current_state_dict, prv_state_dict)
 
                     prv_state_dict = {
-                        k: v.detach().cpu().float().clone() for k, v in current_state_dict.items()
+                        k: v.detach().cpu().float().clone()
+                        for k, v in current_state_dict.items()
                     }
                     # update ema.
                     BETA1 = (1 - 1 / global_step) ** (1 + 16)
@@ -685,7 +724,7 @@ def main(
             )
 
             if global_step % 4096 == 1:
-        
+
                 os.makedirs(f"{save_dir}/model_{global_step}", exist_ok=True)
                 save_zero_three_model(
                     model_engine,
