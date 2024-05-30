@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "Citations would be appreciated if you end up using this tool! I currently go by Simo Ryu"
+authors:
+- family-names: "Ryu"
+  given-names: "Simo"
+  orcid: "https://orcid.org/0009-0008-0017-2677"
+title: "minRF: Minimal Implementation of Scalable Rectified Flow Transformers"
+version: 0.0.1
+date-released: 2024-05
+url: "https://github.com/cloneofsimo/lora"
