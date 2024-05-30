@@ -10,7 +10,7 @@ echo "NCCL_P2P_LEVEL=NVL" >> ~/.deepspeed_env
 echo "NCCL_SHM_DISABLE=1" >> ~/.deepspeed_env
 
 # goes into ssh of each host in hostfile and run the following cmd
-COMMAND="lsof /dev/nvidia* | awk '{print $2}' | xargs -I {} kill {}"
+COMMAND="lsof /dev/nvidia* | awk '{print \$2}' | xargs -I {} kill {}"
 
 # run the command on all hosts in hostfile
 for host in `cat hostfiles`; do
@@ -26,11 +26,11 @@ deepspeed --hostfile=./hostfiles \
         main_t2i.py \
         --learning_rate 0.0366 \
         --hidden_dim 2560 \
-        --n_layers 28 \
-        --run_name node-2-6.5b-run \
-        --save_dir "/home/ubuntu/ckpts" \
+        --n_layers 16 \
+        --run_name node-2-8L-run \
+        --save_dir "/home/ubuntu/ckpts_16L" \
         --num_train_epochs 200 \
         --train_batch_size 1536 \
-        --per_device_train_batch_size 12 \
+        --per_device_train_batch_size 24 \
         --train_dir "/jfs/datacomp-1b-0-10k/0/" \
         --seed 0 

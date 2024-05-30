@@ -407,13 +407,13 @@ def main(
             ),
             True,
         ).cuda()
-        rf.load_state_dict(
-            torch.load(
-                "/home/ubuntu/ckpts/model_32769/ema1.pt",
-                map_location="cpu",
-            ),
-            strict=False,
-        )
+        # rf.load_state_dict(
+        #     torch.load(
+        #         "/home/ubuntu/ckpts/model_32769/ema1.pt",
+        #         map_location="cpu",
+        #     ),
+        #     strict=False,
+        # )
 
         # rf.model.extend_pe((32, 32), (vaeres, vaeres))
 
@@ -656,7 +656,7 @@ def main(
                     lossbin[int(t * 10)] += l
                     losscnt[int(t * 10)] += 1
 
-                if global_step % 16 == 0:
+                if global_step % 32 == 0:
                     wandb.log(
                         {
                             "train/avg_loss": sum(lossbin.values())
