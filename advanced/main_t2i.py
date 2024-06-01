@@ -407,13 +407,17 @@ def main(
             ),
             True,
         ).cuda()
-        # rf.load_state_dict(
-        #     torch.load(
-        #         "/home/ubuntu/ckpts/model_32769/ema1.pt",
-        #         map_location="cpu",
-        #     ),
-        #     strict=False,
-        # )
+        statedict = torch.load(
+                "/home/ubuntu/ckpts_8L/model_143361/ema1.pt",
+                map_location="cpu",
+            )
+        # remove  model.layers.23.modC.1.weight
+        statedict.pop("model.layers.23.modC.1.weight")
+
+        rf.load_state_dict(
+            statedict,
+            strict=False,
+        )
 
         # rf.model.extend_pe((32, 32), (vaeres, vaeres))
 
@@ -533,11 +537,14 @@ def main(
 
     torch.distributed.barrier()
     ## Config muP-learning rate.
-    no_decay_name_list = ["bias", "norm", "positional_encoding"]
-
-    input_tensors = ["cond_seq_linear", "init_x_linear"]
+    no_decay_name_list = ["bias", "norm", "positional_encoding", "register_tokens"]
 
     small_train_name_list = ["w2q", "w2k", "w2v", "w2o", "mlpX", "modX"]
+
+    custom_lr_set = {
+        "init_x_linear" : 4.0,
+        "cond_seq_linear" : 32.0,
+    }
 
     optimizer_grouped_parameters = []
     final_optimizer_settings = {}
@@ -554,9 +561,11 @@ def main(
 
             if any(ndnl in n for ndnl in no_decay_name_list):
                 group_parameters["lr"] = learning_rate * 0.033
-            elif any(ipt in n for ipt in input_tensors):
+            elif any(ipt in n for ipt in custom_lr_set.keys()):
                 input_dim = p.shape[-1]
-                group_parameters["lr"] = learning_rate * (16 / input_dim)
+                ipt = [ipt for ipt in custom_lr_set.keys() if ipt in n][0]
+                group_parameters["lr"] = learning_rate * (custom_lr_set[ipt] / input_dim)
+                
             else:
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 

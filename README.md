@@ -1,4 +1,4 @@
-# Minimal Implementation of Rectified Flow
+# Minimal Implementation of Scalable Rectified Flow Transformers
 
 <p align="center">
   <img src="contents/51.gif" alt="large" width="300">

@@ -26,11 +26,12 @@ deepspeed --hostfile=./hostfiles \
         main_t2i.py \
         --learning_rate 0.0366 \
         --hidden_dim 2560 \
-        --n_layers 16 \
-        --run_name node-2-8L-run \
-        --save_dir "/home/ubuntu/ckpts_16L" \
+        --n_layers 28 \
+        --run_name node-2-28L-run \
+        --save_dir "/home/ubuntu/ckpts_8L_2" \
         --num_train_epochs 200 \
         --train_batch_size 1536 \
         --per_device_train_batch_size 24 \
-        --train_dir "/jfs/datacomp-1b-0-10k/0/" \
-        --seed 0 
+        --train_dir "/jfs/datacomp-1b-0-10k/1/" \
+        --seed 0 \
+        --note "progressive growth" 
