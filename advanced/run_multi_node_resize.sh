@@ -31,7 +31,7 @@ deepspeed --hostfile=./hostfiles \
         --save_dir "/home/ubuntu/ckpts_36L_2_highres" \
         --num_train_epochs 200 \
         --train_batch_size 384 \
-        --per_device_train_batch_size 6 \
+        --per_device_train_batch_size 4 \
         --train_dir "/home/ubuntu/laionpop" \
         --seed 3 \
         --note "Laion Pop Aesthetic fine tuning" \

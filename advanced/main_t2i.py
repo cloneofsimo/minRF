@@ -132,7 +132,7 @@ class RF(torch.nn.Module):
         self.stratified = False
 
     def forward(self, x, cond):
-        
+
         b = x.size(0)
         if self.ln:
             if self.stratified:
@@ -419,7 +419,7 @@ def main(
             statedict,
             strict=False,
         )
-        
+
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = {
         k: v.detach().cpu().float().clone() for k, v in ema_state_dict1.items()
@@ -541,8 +541,8 @@ def main(
     small_train_name_list = ["w2q", "w2k", "w2v", "w2o", "mlpX", "modX"]
 
     custom_lr_set = {
-        "init_x_linear" : 4.0,
-        "cond_seq_linear" : 32.0,
+        "init_x_linear": 4.0,
+        "cond_seq_linear": 32.0,
     }
 
     optimizer_grouped_parameters = []
@@ -563,8 +563,10 @@ def main(
             elif any(ipt in n for ipt in custom_lr_set.keys()):
                 input_dim = p.shape[-1]
                 ipt = [ipt for ipt in custom_lr_set.keys() if ipt in n][0]
-                group_parameters["lr"] = learning_rate * (custom_lr_set[ipt] / input_dim)
-                
+                group_parameters["lr"] = learning_rate * (
+                    custom_lr_set[ipt] / input_dim
+                )
+
             else:
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 
@@ -754,6 +756,7 @@ def main(
 
             # sync
             torch.distributed.barrier()
+
 
 if __name__ == "__main__":
     main()

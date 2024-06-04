@@ -131,14 +131,14 @@ class RF(torch.nn.Module):
         self.ln = ln
         self.stratified = False
 
-    def forward(self, x, cond, randomly_augment_x_latent = False):
-        
+    def forward(self, x, cond, randomly_augment_x_latent=False):
+
         if randomly_augment_x_latent:
             # this will take B, C, H, W latent and crop it so they are ~ 33% of the original size.
             b, c, h, w = x.size()
             if random.random() < 0.6:
-                new_w = random.randint(int(w*0.3333), w)
-                new_h = random.randint(int(h*0.3333), h)
+                new_w = random.randint(int(w * 0.3333), w)
+                new_h = random.randint(int(h * 0.3333), h)
                 # We dont want very small spatiality. We priotize uniform distibution on w, but h should be large enough.
                 # if new_w = 0.333w, you should get max h.
                 new_h = max(new_h, int(0.3333 * w * h / new_w))
@@ -151,9 +151,16 @@ class RF(torch.nn.Module):
                 # and also, they are correct. This comes with the tradeoff that in worst case we drop 66% of the batches.
 
                 new_b = int(0.18 * b * h * w / (new_h * new_w)) * 2
-                x = x[:new_b, :, h // 2 - new_h // 2 : h // 2 + new_h // 2, w // 2 - new_w // 2 : w // 2 + new_w // 2]
+                new_b = min(new_b, 1)
+                x = x[
+                    :new_b,
+                    :,
+                    h // 2 - new_h // 2 : h // 2 + new_h // 2,
+                    w // 2 - new_w // 2 : w // 2 + new_w // 2,
+                ]
             else:
-                x = x[:int(b * 0.18)*2]
+                new_b = min(int(b * 0.18) * 2, 1)
+                x = x[:new_b]
 
         b = x.size(0)
         if self.ln:
@@ -448,7 +455,7 @@ def main(
             strict=False,
         )
         if resize_pe_at_initialization:
-            rf.model.extend_pe((16, 16), (vaeres//2, vaeres//2))
+            rf.model.extend_pe((16, 16), (vaeres // 2, vaeres // 2))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = {
@@ -571,8 +578,8 @@ def main(
     small_train_name_list = ["w2q", "w2k", "w2v", "w2o", "mlpX", "modX"]
 
     custom_lr_set = {
-        "init_x_linear" : 4.0,
-        "cond_seq_linear" : 32.0,
+        "init_x_linear": 4.0,
+        "cond_seq_linear": 32.0,
     }
 
     optimizer_grouped_parameters = []
@@ -593,8 +600,10 @@ def main(
             elif any(ipt in n for ipt in custom_lr_set.keys()):
                 input_dim = p.shape[-1]
                 ipt = [ipt for ipt in custom_lr_set.keys() if ipt in n][0]
-                group_parameters["lr"] = learning_rate * (custom_lr_set[ipt] / input_dim)
-                
+                group_parameters["lr"] = learning_rate * (
+                    custom_lr_set[ipt] / input_dim
+                )
+
             else:
                 group_parameters["lr"] = learning_rate * (32 / hidden_dim)
 
@@ -680,7 +689,9 @@ def main(
                 .to(torch.bfloat16)
             )
 
-            loss, info = model_engine(x, {"c_seq": cond}, randomly_augment_x_latent=True)
+            loss, info = model_engine(
+                x, {"c_seq": cond}, randomly_augment_x_latent=True
+            )
             model_engine.backward(loss)
             model_engine.step()
 
@@ -784,6 +795,7 @@ def main(
 
             # sync
             torch.distributed.barrier()
+
 
 if __name__ == "__main__":
     main()
