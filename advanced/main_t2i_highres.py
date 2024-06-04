@@ -344,7 +344,7 @@ _encodings["uint8"] = uint8
 @click.option("--note", default="hi", help="Note for wandb")
 @click.option("--vaeres", default=32, help="VAE resolution. 32 x 32 by default")
 @click.option(
-    "--vae_col", default="vae_256x256_latents", help="Column name for VAE data"
+    "--vae_col", default="vae_1024x1024_latents", help="Column name for VAE data"
 )
 @click.option("--t5_col", default="t5_xl_embeddings", help="Column name for T5 data")
 @click.option(
@@ -675,7 +675,7 @@ def main(
             )
 
             cond = (
-                (batch[t5_col].reshape(-1, 77 * 3, cond_seq_dim))[:, :128, :]
+                (batch[t5_col].reshape(-1, 256, cond_seq_dim))
                 .to(device)
                 .to(torch.bfloat16)
             )

@@ -23,15 +23,17 @@ done
 
 
 deepspeed --hostfile=./hostfiles \
-        main_t2i.py \
+        main_t2i_highres.py \
         --learning_rate 0.0366 \
         --hidden_dim 2560 \
         --n_layers 36 \
-        --run_name node-2-28L-run \
-        --save_dir "/home/ubuntu/ckpts_36L_2" \
+        --run_name node-2-highres \
+        --save_dir "/home/ubuntu/ckpts_36L_2_highres" \
         --num_train_epochs 200 \
         --train_batch_size 1024 \
-        --per_device_train_batch_size 16 \
-        --train_dir "/jfs/datacomp-1b-0-10k/0/" \
+        --per_device_train_batch_size 6 \
+        --train_dir "/home/ubuntu/laionpop" \
         --seed 3 \
-        --note "progressive growth-group-backto-1"      
+        --note "progressive growth-group-backto-1" \
+        --resize_pe_at_initialization True \
+        --vaeres 128
