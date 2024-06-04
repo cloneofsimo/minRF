@@ -313,7 +313,7 @@ class MMDiT(nn.Module):
         self.w_max = int(max_seq ** 0.5)
 
     @torch.no_grad()
-    def extend_pe(self, init_dim=(32, 32), target_dim=(64, 64)):
+    def extend_pe(self, init_dim=(16, 16), target_dim=(64, 64)):
         # extend pe
         pe_data = self.positional_encoding.data.squeeze(0)[: init_dim[0] * init_dim[1]]
 
@@ -334,17 +334,17 @@ class MMDiT(nn.Module):
         h_p, w_p = h // self.patch_size, w // self.patch_size
         original_pe_indexes = torch.arange(self.positional_encoding.shape[1])
         original_pe_indexes = original_pe_indexes.view(self.h_max, self.w_max)
-        original_pe_indexes = original_pe_indexes[h//2 - h_p//2: h//2 + h_p//2, w//2 - w_p//2: w//2 + w_p//2]
+        original_pe_indexes = original_pe_indexes[self.h_max//2 - h_p//2: self.h_max//2 + h_p//2, self.w_max//2 - w_p//2: self.w_max//2 + w_p//2]
         return original_pe_indexes.flatten()
 
 
-    def unpatchify(self, x):
+    def unpatchify(self, x, h, w):
         c = self.out_channels
         p = self.patch_size
-        h = w = int(x.shape[1] ** 0.5)
+
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
         x = torch.einsum("nhwpqc->nchpwq", x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
+        imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
 
     def patchify(self, x):
@@ -365,12 +365,14 @@ class MMDiT(nn.Module):
         b, c, h, w = x.shape
 
         pe_indexes = self.pe_selection_index_based_on_dim(h, w)
+        #print(pe_indexes.shape)
         
         x = self.init_x_linear(self.patchify(x))  # B, T_x, D
         x = x + self.positional_encoding[:, pe_indexes]
 
         # process conditions for MMDiT Blocks
-        c_seq = conds["c_seq"]  # B, T_c, D_c
+        c_seq = conds["c_seq"][:b] # B, T_c, D_c
+        t = t[:b]
         # c_vec = conds["c_vec"]  # B, D_gc
         c = self.cond_seq_linear(c_seq)  # B, T_c, D
         c = torch.cat([self.register_tokens.repeat(c.size(0), 1, 1), c], dim=1)
@@ -386,7 +388,7 @@ class MMDiT(nn.Module):
 
         x = modulate(x, fshift, fscale)
         x = self.final_linear(x)
-        x = self.unpatchify(x)
+        x = self.unpatchify(x, h//self.patch_size, w//self.patch_size)
         return x
 
 
@@ -455,27 +457,28 @@ class MMDiT_for_IN1K(MMDiT):
 
 
 if __name__ == "__main__":
-    # model = MMDiT()
-    # x = torch.randn(2, 4, 32, 32)
-    # t = torch.randn(2)
-    # conds = {"c_seq": torch.randn(2, 32, 2048), "c_vec": torch.randn(2, 1024)}
-    # out = model(x, t, conds)
-    # print(out.shape)
-    # print(out)
-
-    model = MMDiT_for_IN1K(
-        in_channels=4,
-        out_channels=4,
-        dim=2048,
-        global_conddim=2048,
-        n_layers=48,
-        n_heads=8,
-    )
-    # print size
-    tot = sum([p.numel() for p in model.parameters() if p.requires_grad])
-    print(f"tot params {tot}, {tot // 1e6}M")
-    x = torch.randn(2, 4, 32, 32)
-    t = torch.randn(2)
-    conds = torch.randint(0, 1000, (2,))
+    model = MMDiT(max_seq = 32 * 32)
+    model.extend_pe((32, 32), (64, 64))
+    x = torch.randn(2, 4, 20, 48)
+    t = torch.randn(8)
+    conds = {"c_seq": torch.randn(8, 32, 2048)}
     out = model(x, t, conds)
     print(out.shape)
+    #print(out)
+
+    # model = MMDiT_for_IN1K(
+    #     in_channels=4,
+    #     out_channels=4,
+    #     dim=2048,
+    #     global_conddim=2048,
+    #     n_layers=48,
+    #     n_heads=8,
+    # )
+    # # print size
+    # tot = sum([p.numel() for p in model.parameters() if p.requires_grad])
+    # print(f"tot params {tot}, {tot // 1e6}M")
+    # x = torch.randn(2, 4, 32, 32)
+    # t = torch.randn(2)
+    # conds = torch.randint(0, 1000, (2,))
+    # out = model(x, t, conds)
+    # print(out.shape)

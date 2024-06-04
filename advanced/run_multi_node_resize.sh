@@ -30,10 +30,10 @@ deepspeed --hostfile=./hostfiles \
         --run_name node-2-highres \
         --save_dir "/home/ubuntu/ckpts_36L_2_highres" \
         --num_train_epochs 200 \
-        --train_batch_size 1024 \
+        --train_batch_size 384 \
         --per_device_train_batch_size 6 \
         --train_dir "/home/ubuntu/laionpop" \
         --seed 3 \
-        --note "progressive growth-group-backto-1" \
+        --note "Laion Pop Aesthetic fine tuning" \
         --resize_pe_at_initialization True \
         --vaeres 128

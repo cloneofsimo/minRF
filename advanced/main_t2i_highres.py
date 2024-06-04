@@ -131,29 +131,29 @@ class RF(torch.nn.Module):
         self.ln = ln
         self.stratified = False
 
-    def forward(self, x, cond, randomly_augment_x_latent = True):
+    def forward(self, x, cond, randomly_augment_x_latent = False):
         
         if randomly_augment_x_latent:
             # this will take B, C, H, W latent and crop it so they are ~ 33% of the original size.
             b, c, h, w = x.size()
             if random.random() < 0.6:
-                new_w = random.randint(w*0.3333, w)
-                new_h = random.randint(h*0.3333, h)
+                new_w = random.randint(int(w*0.3333), w)
+                new_h = random.randint(int(h*0.3333), h)
                 # We dont want very small spatiality. We priotize uniform distibution on w, but h should be large enough.
                 # if new_w = 0.333w, you should get max h.
                 new_h = max(new_h, int(0.3333 * w * h / new_w))
                 # this way, we are making sure we don't get very small spatiality.
                 new_w, new_h = min(new_w, w), min(new_h, h)
                 # make it even
-                new_w, new_h = new_w - new_w % 2, new_h - new_h % 2
+                new_w, new_h = new_w - new_w % 4, new_h - new_h % 4
 
                 # now make b maximal. Following will gurantee that new_b, new_h, new_w are similar accross all devices,
                 # and also, they are correct. This comes with the tradeoff that in worst case we drop 66% of the batches.
 
-                new_b = int(0.16 * b * h * w / (new_h * new_w)) * 2
-                x = x[:new_b, :, h // 2 - new_h // 2 : h // 2 + new_h // 2, w // 2 - new_w // 2 : w // 2 + new_w]
+                new_b = int(0.18 * b * h * w / (new_h * new_w)) * 2
+                x = x[:new_b, :, h // 2 - new_h // 2 : h // 2 + new_h // 2, w // 2 - new_w // 2 : w // 2 + new_w // 2]
             else:
-                x = x[:int(b * 0.16)*2]
+                x = x[:int(b * 0.18)*2]
 
         b = x.size(0)
         if self.ln:
@@ -448,7 +448,7 @@ def main(
             strict=False,
         )
         if resize_pe_at_initialization:
-            rf.model.extend_pe((32, 32), (vaeres, vaeres))
+            rf.model.extend_pe((16, 16), (vaeres//2, vaeres//2))
 
     ema_state_dict1 = extract_model_state_dict_deepspeed(rf, global_rank)
     ema_state_dict2 = {
@@ -538,7 +538,7 @@ def main(
         )
 
     right_pad = lambda x: torch.cat(
-        [x, torch.zeros((77 * 3) - x.size(0), cond_seq_dim).to(x.device)], dim=0
+        [x, torch.zeros((256) - x.size(0), cond_seq_dim).to(x.device)], dim=0
     )
 
     def dequantize_t5(tensor):
@@ -680,7 +680,7 @@ def main(
                 .to(torch.bfloat16)
             )
 
-            loss, info = model_engine(x, {"c_seq": cond})
+            loss, info = model_engine(x, {"c_seq": cond}, randomly_augment_x_latent=True)
             model_engine.backward(loss)
             model_engine.step()
 
