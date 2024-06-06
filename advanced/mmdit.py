@@ -373,8 +373,8 @@ class MMDiT(nn.Module):
         x = x + self.positional_encoding[:, pe_indexes]
 
         # process conditions for MMDiT Blocks
-        c_seq = conds["c_seq"][:b]  # B, T_c, D_c
-        t = t[:b]
+        c_seq = conds["c_seq"][0:b]  # B, T_c, D_c
+        t = t[0:b]
         # c_vec = conds["c_vec"]  # B, D_gc
         c = self.cond_seq_linear(c_seq)  # B, T_c, D
         c = torch.cat([self.register_tokens.repeat(c.size(0), 1, 1), c], dim=1)
@@ -461,7 +461,7 @@ class MMDiT_for_IN1K(MMDiT):
 if __name__ == "__main__":
     model = MMDiT(max_seq=32 * 32)
     model.extend_pe((32, 32), (64, 64))
-    x = torch.randn(2, 4, 20, 48)
+    x = torch.randn(1, 4, 20, 48)
     t = torch.randn(8)
     conds = {"c_seq": torch.randn(8, 32, 2048)}
     out = model(x, t, conds)

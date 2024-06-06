@@ -24,13 +24,13 @@ done
 
 deepspeed --hostfile=./hostfiles \
         main_t2i_highres.py \
-        --learning_rate 0.0366 \
+        --learning_rate 0.006 \
         --hidden_dim 2560 \
         --n_layers 36 \
         --run_name node-2-highres \
-        --save_dir "/home/ubuntu/ckpts_36L_2_highres" \
+        --save_dir "/home/ubuntu/ckpts_36L_2_highres_freezemost" \
         --num_train_epochs 200 \
-        --train_batch_size 384 \
+        --train_batch_size 256 \
         --per_device_train_batch_size 4 \
         --train_dir "/home/ubuntu/laionpop" \
         --seed 3 \

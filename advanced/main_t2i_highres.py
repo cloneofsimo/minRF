@@ -130,6 +130,7 @@ class RF(torch.nn.Module):
         self.model = model
         self.ln = ln
         self.stratified = False
+        self.t_transform =  lambda t : (math.sqrt(3) * t / (1 + (math.sqrt(3) - 1) *t))
 
     def forward(self, x, cond, randomly_augment_x_latent=False):
 
@@ -151,7 +152,7 @@ class RF(torch.nn.Module):
                 # and also, they are correct. This comes with the tradeoff that in worst case we drop 66% of the batches.
 
                 new_b = int(0.18 * b * h * w / (new_h * new_w)) * 2
-                new_b = min(new_b, 1)
+                new_b = max(new_b, 1)
                 x = x[
                     :new_b,
                     :,
@@ -159,10 +160,11 @@ class RF(torch.nn.Module):
                     w // 2 - new_w // 2 : w // 2 + new_w // 2,
                 ]
             else:
-                new_b = min(int(b * 0.18) * 2, 1)
+                new_b = max(int(b * 0.18) * 2, 1)
                 x = x[:new_b]
 
         b = x.size(0)
+        #print(x.size())
         if self.ln:
             if self.stratified:
                 # stratified sampling of normals
@@ -178,6 +180,7 @@ class RF(torch.nn.Module):
         else:
             t = torch.rand((b,)).to(x.device)
         texp = t.view([b, *([1] * len(x.shape[1:]))])
+        #texp = self.t_transform(texp)
         z1 = torch.randn_like(x)
         zt = (1 - texp) * x + texp * z1
 
@@ -443,17 +446,18 @@ def main(
             ),
             True,
         ).cuda()
-        statedict = torch.load(
-            "/home/ubuntu/ckpts_36L_2/model_102401/ema1.pt",
-            map_location="cpu",
-        )
-        # remove  model.layers.23.modC.1.weight
-        # statedict.pop("model.layers.31.modC.1.weight")
+        if True:
+            statedict = torch.load(
+                "/home/ubuntu/ckpts_36L_2/model_102401/ema1.pt",
+                map_location="cpu",
+            )
+            # remove  model.layers.23.modC.1.weight
+            # statedict.pop("model.layers.31.modC.1.weight")
 
-        rf.load_state_dict(
-            statedict,
-            strict=False,
-        )
+            rf.load_state_dict(
+                statedict,
+                strict=False,
+            )
         if resize_pe_at_initialization:
             rf.model.extend_pe((16, 16), (vaeres // 2, vaeres // 2))
 
@@ -476,7 +480,7 @@ def main(
     # barrier
     torch.distributed.barrier()
 
-    os.environ["LOCAL_WORLD_SIZE"] = str(8)
+    os.environ["LOCAL_WORLD_SIZE"] = str(min(8, int(os.environ.get("WORLD_SIZE"))))
     # WORLD_SIZE: Total number of processes to launch across all nodes.
     # LOCAL_WORLD_SIZE: Total number of processes to launch for each node.
     # RANK: Rank of the current process, which is the range between 0 to WORLD_SIZE - 1.
@@ -585,6 +589,16 @@ def main(
     optimizer_grouped_parameters = []
     final_optimizer_settings = {}
 
+    # requires grad for first 2 and last 2 layer
+    for n, p in rf.named_parameters():
+        if "layers" in n:
+            if any(layername in n for layername in ["layers.0.", "layers.1.", "layers.34.", "layers.35."]):
+                p.requires_grad = True
+            else:
+                p.requires_grad = False
+        else:
+            p.requires_grad = True
+
     for n, p in rf.named_parameters():
         group_parameters = {}
         if p.requires_grad:
@@ -630,7 +644,7 @@ def main(
     AdamOptimizer = torch.optim.AdamW
 
     optimizer = AdamOptimizer(
-        rf.parameters(), lr=learning_rate * (32 / hidden_dim), betas=(0.9, 0.95)
+        optimizer_grouped_parameters, betas=(0.9, 0.95)
     )
 
     lr_scheduler = get_scheduler(
@@ -772,7 +786,7 @@ def main(
                 f"norm: {norm}, loss: {loss.item()}, global_step: {global_step}"
             )
 
-            if global_step % 4096 == 1:
+            if global_step % 4096 == 0:
 
                 os.makedirs(f"{save_dir}/model_{global_step}", exist_ok=True)
                 save_zero_three_model(
