@@ -24,11 +24,11 @@ done
 
 deepspeed --hostfile=./hostfiles \
         main_t2i_highres.py \
-        --learning_rate 0.006 \
+        --learning_rate 0.018 \
         --hidden_dim 2560 \
         --n_layers 36 \
-        --run_name node-2-highres \
-        --save_dir "/home/ubuntu/ckpts_36L_2_highres_freezemost" \
+        --run_name node-2-highres-0.18 \
+        --save_dir "/home/ubuntu/ckpts_36L_2_highres_lr_0.006" \
         --num_train_epochs 200 \
         --train_batch_size 256 \
         --per_device_train_batch_size 4 \

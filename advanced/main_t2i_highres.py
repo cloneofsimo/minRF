@@ -137,7 +137,7 @@ class RF(torch.nn.Module):
         if randomly_augment_x_latent:
             # this will take B, C, H, W latent and crop it so they are ~ 33% of the original size.
             b, c, h, w = x.size()
-            if random.random() < 0.6:
+            if random.random() < -1:
                 new_w = random.randint(int(w * 0.3333), w)
                 new_h = random.randint(int(h * 0.3333), h)
                 # We dont want very small spatiality. We priotize uniform distibution on w, but h should be large enough.
@@ -180,7 +180,7 @@ class RF(torch.nn.Module):
         else:
             t = torch.rand((b,)).to(x.device)
         texp = t.view([b, *([1] * len(x.shape[1:]))])
-        #texp = self.t_transform(texp)
+        texp = self.t_transform(texp)
         z1 = torch.randn_like(x)
         zt = (1 - texp) * x + texp * z1
 
@@ -443,12 +443,14 @@ def main(
                 n_layers=n_layers,
                 n_heads=8,
                 cond_seq_dim=cond_seq_dim,
+                max_seq= 96 * 96
             ),
             True,
         ).cuda()
         if True:
             statedict = torch.load(
                 "/home/ubuntu/ckpts_36L_2/model_102401/ema1.pt",
+                #"/home/ubuntu/ckpts_36L_2_highres_freezemost/model_12288/ema1.pt",
                 map_location="cpu",
             )
             # remove  model.layers.23.modC.1.weight
@@ -590,14 +592,14 @@ def main(
     final_optimizer_settings = {}
 
     # requires grad for first 2 and last 2 layer
-    for n, p in rf.named_parameters():
-        if "layers" in n:
-            if any(layername in n for layername in ["layers.0.", "layers.1.", "layers.34.", "layers.35."]):
-                p.requires_grad = True
-            else:
-                p.requires_grad = False
-        else:
-            p.requires_grad = True
+    # for n, p in rf.named_parameters():
+    #     if "layers" in n:
+    #         if any(layername in n for layername in ["layers.0.", "layers.1.", "layers.34.", "layers.35."]):
+    #             p.requires_grad = True
+    #         else:
+    #             p.requires_grad = False
+    #     else:
+    #         p.requires_grad = True
 
     for n, p in rf.named_parameters():
         group_parameters = {}
@@ -644,7 +646,9 @@ def main(
     AdamOptimizer = torch.optim.AdamW
 
     optimizer = AdamOptimizer(
-        optimizer_grouped_parameters, betas=(0.9, 0.95)
+        #optimizer_grouped_parameters,
+        rf.parameters(), lr=learning_rate * (32 / hidden_dim),
+        betas=(0.9, 0.95)
     )
 
     lr_scheduler = get_scheduler(

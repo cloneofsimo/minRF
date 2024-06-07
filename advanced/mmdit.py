@@ -80,16 +80,16 @@ class DoubleAttention(nn.Module):
         self.head_dim = dim // n_heads
 
         # this is for cond
-        self.w1q = nn.Linear(dim, n_heads * self.head_dim, bias=False)
-        self.w1k = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
-        self.w1v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
-        self.w1o = nn.Linear(n_heads * self.head_dim, dim, bias=False)
+        self.w1q = nn.Linear(dim, dim, bias=False)
+        self.w1k = nn.Linear(dim, dim, bias=False)
+        self.w1v = nn.Linear(dim, dim, bias=False)
+        self.w1o = nn.Linear(dim, dim, bias=False)
 
         # this is for x
-        self.w2q = nn.Linear(dim, n_heads * self.head_dim, bias=False)
-        self.w2k = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
-        self.w2v = nn.Linear(dim, self.n_heads * self.head_dim, bias=False)
-        self.w2o = nn.Linear(n_heads * self.head_dim, dim, bias=False)
+        self.w2q = nn.Linear(dim, dim, bias=False)
+        self.w2k = nn.Linear(dim, dim, bias=False)
+        self.w2v = nn.Linear(dim, dim, bias=False)
+        self.w2o = nn.Linear(dim, dim, bias=False)
 
         self.q_norm1 = (
             MultiHeadLayerNorm((self.n_heads, self.head_dim))
@@ -267,7 +267,7 @@ class MMDiT(nn.Module):
         super().__init__()
 
         self.t_embedder = TimestepEmbedder(global_conddim)
-        # self.c_vec_embedder = MLP(cond_vector_dim, global_conddim)
+      
         self.cond_seq_linear = nn.Linear(
             cond_seq_dim, dim, bias=False
         )  # linear for something like text sequence.
@@ -292,18 +292,12 @@ class MMDiT(nn.Module):
             nn.SiLU(),
             nn.Linear(global_conddim, 2 * dim, bias=False),
         )
-        # # init zero
         nn.init.constant_(self.final_linear.weight, 0)
-        # nn.init.constant_(self.final_linear.bias, 0)
-
+       
         self.out_channels = out_channels
         self.patch_size = patch_size
 
         for pn, p in self.named_parameters():
-            # if pn.endswith("w1o.weight") or pn.endswith("w2o.weight"):
-            #     # this is muP
-            #     nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * n_layers * dim))
-            # if its modulation
             if "mod" in pn:
                 nn.init.constant_(p, 0)
 
@@ -320,7 +314,6 @@ class MMDiT(nn.Module):
         pe_as_2d = pe_data.view(init_dim[0], init_dim[1], -1).permute(2, 0, 1)
 
         # now we need to extend this to target_dim. for this we will use interpolation.
-        # we will use bilinear interpolation.
         # we will use torch.nn.functional.interpolate
         pe_as_2d = F.interpolate(
             pe_as_2d.unsqueeze(0), size=target_dim, mode="bilinear"
@@ -375,13 +368,11 @@ class MMDiT(nn.Module):
         # process conditions for MMDiT Blocks
         c_seq = conds["c_seq"][0:b]  # B, T_c, D_c
         t = t[0:b]
-        # c_vec = conds["c_vec"]  # B, D_gc
+   
         c = self.cond_seq_linear(c_seq)  # B, T_c, D
         c = torch.cat([self.register_tokens.repeat(c.size(0), 1, 1), c], dim=1)
-
-        t_emb = self.t_embedder(t)  # B, D
-
-        global_cond = t_emb  # B, D
+        
+        global_cond = self.t_embedder(t)  # B, D
 
         for layer in self.layers:
             c, x = layer(c, x, global_cond, **kwargs)
