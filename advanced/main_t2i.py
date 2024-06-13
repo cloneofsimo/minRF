@@ -299,7 +299,7 @@ _encodings["uint8"] = uint8
 )
 @click.option(
     "--skipped_ema_step",
-    default=1024,
+    default=2048,
     help="Skipped EMA step. Karras EMA will save model every skipped_ema_step",
 )
 @click.option("--weight_decay", default=0.1, help="Weight decay")
@@ -409,7 +409,7 @@ def main(
             True,
         ).cuda()
         statedict = torch.load(
-            "/home/ubuntu/ckpts_36L_2/model_102401/ema1.pt",
+            "/home/ubuntu/ckpts_36L_5/model_69633/pytorch_model.bin",
             map_location="cpu",
         )
         # remove  model.layers.23.modC.1.weight
@@ -431,6 +431,7 @@ def main(
     total_params = sum(p.numel() for p in rf.parameters())
     size_in_bytes = total_params * 4
     size_in_gb = size_in_bytes / (1024**3)
+
     print(
         f"Model Size: {size_in_bytes}, {size_in_gb} GB, Total Param Count: {total_params / 1e6} M"
     )
@@ -647,7 +648,7 @@ def main(
             )
 
             cond = (
-                (batch[t5_col].reshape(-1, 77 * 3, cond_seq_dim))[:, :128, :]
+                (batch[t5_col].reshape(-1, 77 * 3, cond_seq_dim))
                 .to(device)
                 .to(torch.bfloat16)
             )

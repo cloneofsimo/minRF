@@ -24,14 +24,14 @@ done
 
 deepspeed --hostfile=./hostfiles \
         main_t2i.py \
-        --learning_rate 0.0366 \
+        --learning_rate 0.0266 \
         --hidden_dim 2560 \
         --n_layers 36 \
-        --run_name node-2-28L-run \
-        --save_dir "/home/ubuntu/ckpts_36L_2" \
+        --run_name node-2-36L-run-6 \
+        --save_dir "/home/ubuntu/ckpts_36L_6" \
         --num_train_epochs 200 \
         --train_batch_size 1024 \
         --per_device_train_batch_size 16 \
-        --train_dir "/jfs/datacomp-1b-0-10k/0/" \
-        --seed 3 \
-        --note "progressive growth-group-backto-1"      
+        --train_dir "/jfs/datacomp-1b-0-10k/2/" \
+        --seed 5 \
+        --note "continue training"      

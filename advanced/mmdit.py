@@ -112,7 +112,7 @@ class DoubleAttention(nn.Module):
             if mh_qknorm
             else Fp32LayerNorm(self.head_dim, bias=False)
         )
-
+    @torch.compile()
     def forward(self, c, x):
 
         bsz, seqlen1, _ = c.shape
@@ -182,6 +182,7 @@ class MMDiTBlock(nn.Module):
         self.attn = DoubleAttention(dim, heads)
         self.is_last = is_last
 
+    @torch.compile()
     def forward(self, c, x, global_cond, **kwargs):
 
         cres, xres = c, x
@@ -242,6 +243,7 @@ class TimestepEmbedder(nn.Module):
             )
         return embedding
 
+    @torch.compile()
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size).to(
             dtype=next(self.parameters()).dtype
@@ -359,11 +361,11 @@ class MMDiT(nn.Module):
         # patchify x, add PE
         b, c, h, w = x.shape
 
-        pe_indexes = self.pe_selection_index_based_on_dim(h, w)
+        # pe_indexes = self.pe_selection_index_based_on_dim(h, w)
         # print(pe_indexes.shape)
 
         x = self.init_x_linear(self.patchify(x))  # B, T_x, D
-        x = x + self.positional_encoding[:, pe_indexes]
+        x = x + self.positional_encoding[:, : x.size(1)]
 
         # process conditions for MMDiT Blocks
         c_seq = conds["c_seq"][0:b]  # B, T_c, D_c
