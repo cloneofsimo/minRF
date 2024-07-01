@@ -71,6 +71,54 @@ class MultiHeadLayerNorm(nn.Module):
         hidden_states = self.weight.to(torch.float32) * hidden_states
         return hidden_states.to(input_dtype)
 
+class SingleAttention(nn.Module):
+    def __init__(self, dim, n_heads, mh_qknorm=False):
+        super().__init__()
+
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+
+        # this is for cond
+        self.w1q = nn.Linear(dim, dim, bias=False)
+        self.w1k = nn.Linear(dim, dim, bias=False)
+        self.w1v = nn.Linear(dim, dim, bias=False)
+        self.w1o = nn.Linear(dim, dim, bias=False)
+
+        self.q_norm1 = (
+            MultiHeadLayerNorm((self.n_heads, self.head_dim))
+            if mh_qknorm
+            else Fp32LayerNorm(self.head_dim, bias=False, elementwise_affine=False)
+        )
+        self.k_norm1 = (
+            MultiHeadLayerNorm((self.n_heads, self.head_dim))
+            if mh_qknorm
+            else Fp32LayerNorm(self.head_dim, bias=False, elementwise_affine=False)
+        )
+    
+    @torch.compile()
+    def forward(self, c):
+
+        bsz, seqlen1, _ = c.shape
+
+        q, k, v = self.w1q(c), self.w1k(c), self.w1v(c)
+        q = q.view(bsz, seqlen1, self.n_heads, self.head_dim)
+        k = k.view(bsz, seqlen1, self.n_heads, self.head_dim)
+        v = v.view(bsz, seqlen1, self.n_heads, self.head_dim)
+        q, k = self.q_norm1(q), self.k_norm1(k)
+
+        output = F.scaled_dot_product_attention(
+            q.permute(0, 2, 1, 3),
+            k.permute(0, 2, 1, 3),
+            v.permute(0, 2, 1, 3),
+            dropout_p=0.0,
+            is_causal=False,
+            scale=1 / self.head_dim**0.5,
+        ).permute(0, 2, 1, 3)
+        output = output.flatten(-2)
+        c = self.w1o(output)
+        return c
+
+
 
 class DoubleAttention(nn.Module):
     def __init__(self, dim, n_heads, mh_qknorm=False):
@@ -94,24 +142,26 @@ class DoubleAttention(nn.Module):
         self.q_norm1 = (
             MultiHeadLayerNorm((self.n_heads, self.head_dim))
             if mh_qknorm
-            else Fp32LayerNorm(self.head_dim, bias=False)
+            else Fp32LayerNorm(self.head_dim, bias=False, elementwise_affine=False)
         )
         self.k_norm1 = (
             MultiHeadLayerNorm((self.n_heads, self.head_dim))
             if mh_qknorm
-            else Fp32LayerNorm(self.head_dim, bias=False)
+            else Fp32LayerNorm(self.head_dim, bias=False, elementwise_affine=False)
         )
 
         self.q_norm2 = (
             MultiHeadLayerNorm((self.n_heads, self.head_dim))
             if mh_qknorm
-            else Fp32LayerNorm(self.head_dim, bias=False)
+            else Fp32LayerNorm(self.head_dim, bias=False, elementwise_affine=False)
         )
         self.k_norm2 = (
             MultiHeadLayerNorm((self.n_heads, self.head_dim))
             if mh_qknorm
-            else Fp32LayerNorm(self.head_dim, bias=False)
+            else Fp32LayerNorm(self.head_dim, bias=False, elementwise_affine=False)
         )
+
+
     @torch.compile()
     def forward(self, c, x):
 
@@ -150,6 +200,7 @@ class DoubleAttention(nn.Module):
         c, x = output.split([seqlen1, seqlen2], dim=1)
         c = self.w1o(c)
         x = self.w2o(x)
+
         return c, x
 
 
@@ -157,8 +208,8 @@ class MMDiTBlock(nn.Module):
     def __init__(self, dim, heads=8, global_conddim=1024, is_last=False):
         super().__init__()
 
-        self.normC1 = Fp32LayerNorm(dim, bias=False)
-        self.normC2 = Fp32LayerNorm(dim, bias=False)
+        self.normC1 = Fp32LayerNorm(dim, elementwise_affine=False, bias=False)
+        self.normC2 = Fp32LayerNorm(dim, elementwise_affine=False, bias=False)
         if not is_last:
             self.mlpC = MLP(dim, hidden_dim=dim * 4)
             self.modC = nn.Sequential(
@@ -171,8 +222,8 @@ class MMDiTBlock(nn.Module):
                 nn.Linear(global_conddim, 2 * dim, bias=False),
             )
 
-        self.normX1 = Fp32LayerNorm(dim, bias=False)
-        self.normX2 = Fp32LayerNorm(dim, bias=False)
+        self.normX1 = Fp32LayerNorm(dim, elementwise_affine=False, bias=False)
+        self.normX2 = Fp32LayerNorm(dim, elementwise_affine=False, bias=False)
         self.mlpX = MLP(dim, hidden_dim=dim * 4)
         self.modX = nn.Sequential(
             nn.SiLU(),
@@ -186,14 +237,11 @@ class MMDiTBlock(nn.Module):
     def forward(self, c, x, global_cond, **kwargs):
 
         cres, xres = c, x
-        # cpath
-        if not self.is_last:
-            cshift_msa, cscale_msa, cgate_msa, cshift_mlp, cscale_mlp, cgate_mlp = (
-                self.modC(global_cond).chunk(6, dim=1)
-            )
-        else:
-            cshift_msa, cscale_msa = self.modC(global_cond).chunk(2, dim=1)
-
+        
+        cshift_msa, cscale_msa, cgate_msa, cshift_mlp, cscale_mlp, cgate_mlp = (
+            self.modC(global_cond).chunk(6, dim=1)
+        )
+      
         c = modulate(self.normC1(c), cshift_msa, cscale_msa)
 
         # xpath
@@ -204,19 +252,51 @@ class MMDiTBlock(nn.Module):
         x = modulate(self.normX1(x), xshift_msa, xscale_msa)
 
         # attention
-
         c, x = self.attn(c, x)
 
-        if not self.is_last:
-            c = self.normC2(cres + cgate_msa.unsqueeze(1) * c)
-            c = cgate_mlp.unsqueeze(1) * self.mlpC(modulate(c, cshift_mlp, cscale_mlp))
-            c = cres + c
+
+        c = self.normC2(cres + cgate_msa.unsqueeze(1) * c)
+        c = cgate_mlp.unsqueeze(1) * self.mlpC(modulate(c, cshift_mlp, cscale_mlp))
+        c = cres + c
 
         x = self.normX2(xres + xgate_msa.unsqueeze(1) * x)
         x = xgate_mlp.unsqueeze(1) * self.mlpX(modulate(x, xshift_mlp, xscale_mlp))
         x = xres + x
 
         return c, x
+
+class DiTBlock(nn.Module):
+    # like MMDiTBlock, but it only has X
+    def __init__(self, dim, heads=8, global_conddim=1024):
+        super().__init__()
+
+        self.norm1 = Fp32LayerNorm(dim, elementwise_affine=False, bias=False)
+        self.norm2 = Fp32LayerNorm(dim, elementwise_affine=False, bias=False)
+
+        self.modCX = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(global_conddim, 6 * dim, bias=False),
+        )
+
+        self.attn = SingleAttention(dim, heads)
+        self.mlp = MLP(dim, hidden_dim=dim * 4)
+
+    @torch.compile()
+    def forward(self, cx, global_cond, **kwargs):
+        cxres = cx
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.modCX(
+            global_cond
+        ).chunk(6, dim=1)
+        cx = modulate(self.norm1(cx), shift_msa, scale_msa)
+        cx = self.attn(cx)
+        cx = self.norm2(cxres + gate_msa.unsqueeze(1) * cx)
+        mlpout = self.mlp(modulate(cx, shift_mlp, scale_mlp))
+        cx = gate_mlp.unsqueeze(1) * mlpout
+
+        cx = cxres + cx
+
+        return cx
+
 
 
 class TimestepEmbedder(nn.Module):
@@ -260,11 +340,11 @@ class MMDiT(nn.Module):
         patch_size=2,
         dim=2048,
         n_layers=8,
+        n_double_layers=4,
         n_heads=4,
         global_conddim=1024,
         cond_seq_dim=2048,
-        cond_vector_dim=1024,
-        max_seq=96 * 96,
+        max_seq=16 * 16,
     ):
         super().__init__()
 
@@ -280,11 +360,20 @@ class MMDiT(nn.Module):
         self.positional_encoding = nn.Parameter(torch.randn(1, max_seq, dim) * 0.1)
         self.register_tokens = nn.Parameter(torch.randn(1, 8, dim) * 0.02)
 
-        self.layers = nn.ModuleList([])
-        for idx in range(n_layers):
-            self.layers.append(
+        self.double_layers = nn.ModuleList([])
+        self.single_layers = nn.ModuleList([])
+
+
+        for idx in range(n_double_layers):
+            self.double_layers.append(
                 MMDiTBlock(dim, n_heads, global_conddim, is_last=(idx == n_layers - 1))
             )
+        
+        for idx in range(n_double_layers, n_layers):
+            self.single_layers.append(
+                DiTBlock(dim, n_heads, global_conddim)
+            )
+
 
         self.final_linear = nn.Linear(
             dim, patch_size * patch_size * out_channels, bias=False
@@ -298,10 +387,13 @@ class MMDiT(nn.Module):
        
         self.out_channels = out_channels
         self.patch_size = patch_size
+        self.n_double_layers = n_double_layers
+        self.n_layers = n_layers
 
         for pn, p in self.named_parameters():
-            if "mod" in pn:
+            if ".mod" in pn:
                 nn.init.constant_(p, 0)
+                print("zeroed", pn)
 
         # if cond_seq_linear
         nn.init.constant_(self.cond_seq_linear.weight, 0)
@@ -375,9 +467,20 @@ class MMDiT(nn.Module):
         c = torch.cat([self.register_tokens.repeat(c.size(0), 1, 1), c], dim=1)
         
         global_cond = self.t_embedder(t)  # B, D
+     
+        if len(self.double_layers) > 0:
+            for layer in self.double_layers:
+              
+                c, x = layer(c, x, global_cond, **kwargs)
+                
+        if len(self.single_layers) > 0:
+            c_len = c.size(1)
+            cx = torch.cat([c, x], dim=1)
+            for layer in self.single_layers:
+      
+                cx = layer(cx, global_cond, **kwargs)
 
-        for layer in self.layers:
-            c, x = layer(c, x, global_cond, **kwargs)
+            x = cx[:, c_len:]
 
         fshift, fscale = self.modF(global_cond).chunk(2, dim=1)
 
@@ -387,72 +490,8 @@ class MMDiT(nn.Module):
         return x
 
 
-class MultiTokenEmbedding(nn.Module):
-    # make two embedding, one for each token, concat and return
-    def __init__(self, num_tokens, hidden_size):
-        super().__init__()
-        self.embedding1 = nn.Embedding(num_tokens, hidden_size)
-        self.embedding2 = nn.Embedding(num_tokens, hidden_size)
-
-    def forward(self, x):
-        emb1 = self.embedding1(x).unsqueeze(1)
-        emb2 = self.embedding2(x).unsqueeze(1)
-        return torch.cat([emb1, emb2], dim=1)  # B, 2, D
-
-
-class MMDiT_for_IN1K(MMDiT):
-    # This will "simulate" having clip.
-    # it will act as having clip that encodes both clip global vector and clip sequence vector.
-    # in reality this is just one hot encoding.
-    def __init__(
-        self,
-        in_channels=4,
-        out_channels=4,
-        patch_size=2,
-        dim=1024,
-        n_layers=8,
-        n_heads=4,
-        global_conddim=1024,
-        cond_seq_dim=2048,
-        cond_vector_dim=1024,
-        max_seq=32 * 32,
-    ):
-        super(MMDiT_for_IN1K, self).__init__(
-            in_channels,
-            out_channels,
-            patch_size,
-            dim,
-            n_layers,
-            n_heads,
-            global_conddim,
-            cond_seq_dim,
-            cond_vector_dim,
-            max_seq,
-        )
-
-        # replace cond_seq_linear and c_vec_embedder, so they will both take discrete input.
-        self.c_vec_embedder = nn.Embedding(1024, global_conddim)
-        self.cond_seq_linear = MultiTokenEmbedding(1024, dim)
-
-        # init embedding with very small 0.03
-        nn.init.trunc_normal_(
-            self.c_vec_embedder.weight, mean=0.0, std=0.1, a=-0.2, b=0.2
-        )
-        nn.init.trunc_normal_(
-            self.cond_seq_linear.embedding1.weight, mean=0.0, std=0.1, a=-0.2, b=0.2
-        )
-        nn.init.trunc_normal_(
-            self.cond_seq_linear.embedding2.weight, mean=0.0, std=0.1, a=-0.2, b=0.2
-        )
-
-    def forward(self, x, t, conds, **kwargs):
-
-        conds_dict = {"c_seq": conds, "c_vec": conds}
-        return super(MMDiT_for_IN1K, self).forward(x, t, conds_dict, **kwargs)
-
-
 if __name__ == "__main__":
-    model = MMDiT(max_seq=32 * 32)
+    model = MMDiT(max_seq=32 * 32, dim = 3072, n_heads=24)
     model.extend_pe((32, 32), (64, 64))
     x = torch.randn(1, 4, 20, 48)
     t = torch.randn(8)
