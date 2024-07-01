@@ -14,10 +14,10 @@ Everything is still self-contained, minimal, and hopefully easy to hack. There i
 
 # 1. *Simple* Rectified Flow, for beginners
 
-Install torch, pil, torchvision
+Install torch, pil, torchvision, tqdm and wandb
 
 ```
-pip install torch torchvision pillow
+pip install torch torchvision pillow tqdm wandb
 ```
 
 Run
