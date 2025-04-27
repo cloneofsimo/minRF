@@ -95,7 +95,7 @@ if __name__ == "__main__":
         ).cuda()
 
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of parameters: {model_size}, {model_size / 1e6}M")
+    print(f"Number of trainable parameters: {model_size}, {model_size / 1e6}M")
 
     rf = RF(model)
     optimizer = optim.Adam(model.parameters(), lr=5e-4)
@@ -106,10 +106,10 @@ if __name__ == "__main__":
 
     wandb.init(project=f"rf_{dataset_name}")
 
-    for epoch in range(100):
+    for epoch in tqdm(range(100), unit="epoch", leave=False, position=0):
         lossbin = {i: 0 for i in range(10)}
         losscnt = {i: 1e-6 for i in range(10)}
-        for i, (x, c) in tqdm(enumerate(dataloader)):
+        for i, (x, c) in tqdm(enumerate(dataloader), total=len(dataloader), unit="batch", leave=False, position=1):
             x, c = x.cuda(), c.cuda()
             optimizer.zero_grad()
             loss, blsct = rf.forward(x, c)
@@ -123,10 +123,8 @@ if __name__ == "__main__":
                 lossbin[int(t * 10)] += l
                 losscnt[int(t * 10)] += 1
 
-        # log
-        for i in range(10):
-            print(f"Epoch: {epoch}, {i} range loss: {lossbin[i] / losscnt[i]}")
-
+        time_bin_losses = [f"{i}:{lossbin[i]/losscnt[i]:.4f}" for i in range(10)]
+        tqdm.write(f"Epoch {epoch} time bin losses: {' '.join(time_bin_losses)}")
         wandb.log({f"lossbin_{i}": lossbin[i] / losscnt[i] for i in range(10)})
 
         rf.model.eval()
